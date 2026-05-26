@@ -1,0 +1,57 @@
+import fs from "fs";
+import path from "path";
+import { Config } from "./config.js";
+
+function formatDate(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function formatTime(d: Date): string {
+  const h = String(d.getHours()).padStart(2, "0");
+  const m = String(d.getMinutes()).padStart(2, "0");
+  const s = String(d.getSeconds()).padStart(2, "0");
+  return `${h}:${m}:${s}`;
+}
+
+function formatDisplayDate(d: Date): string {
+  return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`;
+}
+
+export class ObsidianWriter {
+  private filePath: string;
+  private fileCreated = false;
+
+  constructor(private config: Config) {
+    const dir = path.join(config.vaultPath, config.notesDir);
+    fs.mkdirSync(dir, { recursive: true });
+    const date = formatDate(new Date());
+    this.filePath = path.join(dir, `字幕-${date}.md`);
+  }
+
+  beginSession(): void {
+    const now = new Date();
+    if (!this.fileCreated && !fs.existsSync(this.filePath)) {
+      const header = `# 字幕笔记 - ${formatDisplayDate(now)}\n\n`;
+      fs.writeFileSync(this.filePath, header, "utf-8");
+      this.fileCreated = true;
+    } else {
+      // Append separator for subsequent sessions
+      fs.appendFileSync(this.filePath, "\n---\n\n", "utf-8");
+    }
+    fs.appendFileSync(this.filePath, `> ${formatTime(now)} 开始捕获\n\n`, "utf-8");
+  }
+
+  writeLines(lines: string[]): void {
+    const now = new Date();
+    const time = formatTime(now);
+    const content = lines.map((line) => `${time} | ${line}`).join("\n") + "\n";
+    fs.appendFileSync(this.filePath, content, "utf-8");
+  }
+
+  getFilePath(): string {
+    return this.filePath;
+  }
+}

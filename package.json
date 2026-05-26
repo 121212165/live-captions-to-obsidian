@@ -1,0 +1,13 @@
+{
+  "name": "live-captions-to-obsidian",
+  "version": "1.0.0",
+  "description": "Auto-capture Windows Live Captions text to Obsidian notes",
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/index.ts"
+  },
+  "devDependencies": {
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0"
+  }
+}
