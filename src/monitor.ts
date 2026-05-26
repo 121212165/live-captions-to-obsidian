@@ -36,6 +36,12 @@ export class WindowMonitor extends EventEmitter {
     }) + "\n";
     this.process.stdin?.write(cmd);
 
+    // Drain stderr to prevent process blocking
+    this.process.stderr?.on("data", (data: Buffer) => {
+      const msg = data.toString().trim();
+      if (msg) console.error(`[monitor:stderr] ${msg}`);
+    });
+
     let wasFound = false;
     let buffer = "";
     this.process.stdout?.on("data", (data: Buffer) => {
@@ -56,13 +62,17 @@ export class WindowMonitor extends EventEmitter {
             }
             wasFound = found;
           }
-        } catch { /* ignore */ }
+        } catch { /* ignore non-JSON */ }
       }
     });
 
     this.process.on("error", (err) => this.emit("error", err));
-    this.process.on("close", () => {
-      if (wasFound) this.emit("gone");
+    this.process.on("close", (code) => {
+      console.error(`[monitor] 进程退出 code=${code}`);
+      if (wasFound) {
+        this.emit("gone");
+        wasFound = false;
+      }
     });
   }
 
@@ -70,8 +80,12 @@ export class WindowMonitor extends EventEmitter {
     if (this.process) {
       try {
         this.process.stdin?.write(JSON.stringify({ cmd: "exit" }) + "\n");
-        setTimeout(() => this.process?.kill(), 500);
-      } catch { this.process.kill(); }
+        setTimeout(() => {
+          try { this.process?.kill(); } catch {}
+        }, 500);
+      } catch {
+        try { this.process.kill(); } catch {}
+      }
       this.process = null;
     }
   }

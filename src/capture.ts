@@ -65,6 +65,12 @@ export class CaptureService extends EventEmitter {
     }) + "\n";
     this.process.stdin?.write(cmd);
 
+    // Drain stderr to prevent process blocking
+    this.process.stderr?.on("data", (data: Buffer) => {
+      const msg = data.toString().trim();
+      if (msg) console.error(`[capture:stderr] ${msg}`);
+    });
+
     let buffer = "";
     this.process.stdout?.on("data", (data: Buffer) => {
       buffer += data.toString();
