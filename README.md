@@ -79,11 +79,13 @@ The tool will wait for the Live Captions window to appear. Press `Win+Ctrl+L` to
 
 ## Configuration
 
+The vault path defaults to `$HOME\Documents\Obsidian` and can be overridden with the `OBSIDIAN_VAULT_PATH` environment variable or the `--vault` CLI argument.
+
 All settings can be overridden via CLI arguments:
 
 | Argument | Default | Description |
 |----------|---------|-------------|
-| `--vault PATH` | `C:\Users\lenovo\Documents\Obsidian\explorer` | Path to your Obsidian vault |
+| `--vault PATH` | `$HOME\Documents\Obsidian` (or `OBSIDIAN_VAULT_PATH` env var) | Path to your Obsidian vault |
 | `--dir NAME` | `notes` | Subdirectory inside the vault for caption notes |
 | `--title TITLE` | `实时字幕` | Window title to look for (match your Live Captions language setting) |
 

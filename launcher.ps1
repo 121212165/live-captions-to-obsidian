@@ -4,7 +4,7 @@
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 # 1. Start capture tool in background (hidden)
-Start-Process -FilePath "wscript.exe" -ArgumentList "`"$scriptDir\start-hidden.vbs`"" -WindowStyle Hidden
+$wscriptProc = Start-Process -FilePath "wscript.exe" -ArgumentList "`"$scriptDir\start-hidden.vbs`"" -WindowStyle Hidden -PassThru
 Write-Host "[OK] Capture tool started in background" -ForegroundColor Green
 
 # 2. Wait for tool to initialize
@@ -25,5 +25,13 @@ $kb::keybd_event(0x5B, 0, 2, 0)   # Win up
 Write-Host "[OK] Live Captions opened" -ForegroundColor Green
 Write-Host ""
 Write-Host "Everything is running. Close this window." -ForegroundColor Yellow
-Write-Host "Subtitles auto-save to: $env:USERPROFILE\Documents\Obsidian\explorer\notes\" -ForegroundColor Cyan
-Read-Host "Press Enter to exit"
+Write-Host "Subtitles auto-save to: $env:USERPROFILE\Documents\Obsidian\notes\" -ForegroundColor Cyan
+
+try {
+    Read-Host "Press Enter to exit"
+} finally {
+    # Kill the background capture process on exit (including window close)
+    if ($wscriptProc -and -not $wscriptProc.HasExited) {
+        try { Stop-Process -Id $wscriptProc.Id -Force -ErrorAction SilentlyContinue } catch {}
+    }
+}

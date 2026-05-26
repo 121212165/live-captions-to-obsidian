@@ -62,7 +62,7 @@ export class WindowMonitor extends EventEmitter {
             }
             wasFound = found;
           }
-        } catch { /* ignore non-JSON */ }
+        } catch (e) { console.debug("[monitor] ignoring non-JSON line:", e); }
       }
     });
 
@@ -81,10 +81,10 @@ export class WindowMonitor extends EventEmitter {
       try {
         this.process.stdin?.write(JSON.stringify({ cmd: "exit" }) + "\n");
         setTimeout(() => {
-          try { this.process?.kill(); } catch {}
+          try { this.process?.kill(); } catch (e) { console.error("[monitor] failed to kill process after exit command:", e); }
         }, 500);
       } catch {
-        try { this.process.kill(); } catch {}
+        try { this.process.kill(); } catch (e) { console.error("[monitor] failed to force-kill process:", e); }
       }
       this.process = null;
     }

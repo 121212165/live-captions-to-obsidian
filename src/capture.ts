@@ -7,7 +7,7 @@ import { Config } from "./config.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export interface CaptureEvents {
-  newText: (lines: string[]) => void;
+  text: (lines: string[]) => void;
   gone: () => void;
   error: (err: Error) => void;
 }
@@ -42,6 +42,11 @@ export class CaptureService extends EventEmitter {
         i++;
       }
       newContent = currentText.substring(i);
+      // Deduplicate: if the new content overlaps with the tail of prevText, take only the non-overlapping suffix
+      const prevTail = this.prevText.substring(i);
+      if (prevTail && newContent.startsWith(prevTail)) {
+        newContent = newContent.substring(prevTail.length);
+      }
     }
     this.prevText = currentText;
 
@@ -89,7 +94,7 @@ export class CaptureService extends EventEmitter {
           } else if (msg.type === "gone") {
             this.emit("gone");
           }
-        } catch { /* ignore non-JSON lines */ }
+        } catch (e) { console.debug("[capture] ignoring non-JSON line:", e); }
       }
     });
 
@@ -102,7 +107,7 @@ export class CaptureService extends EventEmitter {
       try {
         this.process.stdin?.write(JSON.stringify({ cmd: "exit" }) + "\n");
         setTimeout(() => this.process?.kill(), 500);
-      } catch { this.process.kill(); }
+      } catch (e) { console.error("[capture] failed to send exit, force killing:", e); this.process.kill(); }
       this.process = null;
     }
     this.prevText = "";

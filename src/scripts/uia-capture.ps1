@@ -180,12 +180,9 @@ function Invoke-Capture {
             return
         }
 
-        # Build JSON array of lines
-        $escapedLines = $lines | ForEach-Object {
-            '"' + ($_ -replace '\\', '\\\\' -replace '"', '\"' -replace "`n", '\n' -replace "`r", '\r' -replace "`t", '\t') + '"'
-        }
-        $jsonArray = '[' + ($escapedLines -join ',') + ']'
-        Send-Json ('{{"type":"text","lines":{0}}}' -f $jsonArray)
+        # Build JSON payload
+        $payload = @{ type = 'text'; lines = $lines } | ConvertTo-Json -Compress
+        Send-Json $payload
 
         # Wait for the interval, checking for commands
         $deadline = [DateTime]::UtcNow.AddMilliseconds($Interval)

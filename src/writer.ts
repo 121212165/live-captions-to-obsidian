@@ -23,12 +23,14 @@ function formatDisplayDate(d: Date): string {
 export class ObsidianWriter {
   private filePath: string;
   private fileCreated = false;
+  private currentDate: string;
+  private notesDir: string;
 
   constructor(private config: Config) {
-    const dir = path.join(config.vaultPath, config.notesDir);
-    fs.mkdirSync(dir, { recursive: true });
-    const date = formatDate(new Date());
-    this.filePath = path.join(dir, `字幕-${date}.md`);
+    this.notesDir = path.join(config.vaultPath, config.notesDir);
+    fs.mkdirSync(this.notesDir, { recursive: true });
+    this.currentDate = formatDate(new Date());
+    this.filePath = path.join(this.notesDir, `字幕-${this.currentDate}.md`);
   }
 
   beginSession(): void {
@@ -46,6 +48,13 @@ export class ObsidianWriter {
 
   writeLines(lines: string[]): void {
     const now = new Date();
+    const today = formatDate(now);
+    if (today !== this.currentDate) {
+      this.currentDate = today;
+      this.filePath = path.join(this.notesDir, `字幕-${today}.md`);
+      this.fileCreated = false;
+      this.beginSession();
+    }
     const time = formatTime(now);
     const content = lines.map((line) => `${time} | ${line}`).join("\n") + "\n";
     fs.appendFileSync(this.filePath, content, "utf-8");
