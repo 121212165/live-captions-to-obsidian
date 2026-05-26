@@ -14,7 +14,7 @@ export interface CaptureEvents {
 
 export class CaptureService extends EventEmitter {
   private process: ChildProcess | null = null;
-  private seenLines = new Set<string>();
+  private prevText = "";
   private scriptPath: string;
 
   constructor(private config: Config) {
@@ -22,8 +22,35 @@ export class CaptureService extends EventEmitter {
     this.scriptPath = path.join(__dirname, "scripts", "uia-capture.ps1");
   }
 
+  /**
+   * Extract truly new content from accumulated text.
+   * Live Captions returns a single growing text block per poll.
+   * We compare against the previous full text to find only the delta.
+   */
+  private extractNewLines(rawLines: string[]): string[] {
+    const currentText = rawLines.join("\n");
+    if (!currentText) return [];
+
+    let newContent: string;
+    if (currentText.startsWith(this.prevText)) {
+      // Normal case: text grew by appending
+      newContent = currentText.substring(this.prevText.length);
+    } else {
+      // Text was rewritten — find longest common prefix
+      let i = 0;
+      while (i < currentText.length && i < this.prevText.length && currentText[i] === this.prevText[i]) {
+        i++;
+      }
+      newContent = currentText.substring(i);
+    }
+    this.prevText = currentText;
+
+    if (!newContent.trim()) return [];
+    return newContent.split("\n").filter((l) => l.trim().length > 0);
+  }
+
   start(): void {
-    this.seenLines.clear();
+    this.prevText = "";
     this.process = spawn("powershell", [
       "-NoProfile",
       "-ExecutionPolicy", "Bypass",
@@ -49,8 +76,7 @@ export class CaptureService extends EventEmitter {
         try {
           const msg = JSON.parse(trimmed);
           if (msg.type === "text" && Array.isArray(msg.lines)) {
-            const newLines = msg.lines.filter((l: string) => !this.seenLines.has(l));
-            for (const l of newLines) this.seenLines.add(l);
+            const newLines = this.extractNewLines(msg.lines);
             if (newLines.length > 0) {
               this.emit("text", newLines);
             }
@@ -73,10 +99,10 @@ export class CaptureService extends EventEmitter {
       } catch { this.process.kill(); }
       this.process = null;
     }
-    this.seenLines.clear();
+    this.prevText = "";
   }
 
   resetDedup(): void {
-    this.seenLines.clear();
+    this.prevText = "";
   }
 }

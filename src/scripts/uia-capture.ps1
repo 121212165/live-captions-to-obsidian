@@ -9,6 +9,10 @@ param()
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+# Force UTF-8 output so Node.js receives correctly encoded text
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
+
 # ── Load UI Automation assemblies ──────────────────────────────────────────────
 try {
     [System.Reflection.Assembly]::LoadWithPartialName('UIAutomationClient') | Out-Null
@@ -31,26 +35,33 @@ function Find-LiveCaptionsWindow {
 
     $root = [System.Windows.Automation.AutomationElement]::RootElement
 
+    # Primary: find by window class name (encoding-safe, reliable)
+    $classCondition = New-Object System.Windows.Automation.PropertyCondition(
+        [System.Windows.Automation.AutomationElement]::ClassNameProperty,
+        'LiveCaptionsDesktopWindow'
+    )
+    $window = $root.FindFirst(
+        [System.Windows.Automation.TreeScope]::Children,
+        $classCondition
+    )
+    if ($window) { return $window }
+
+    # Fallback: find by title substring
     $condition = New-Object System.Windows.Automation.PropertyCondition(
         [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
         [System.Windows.Automation.ControlType]::Window
     )
-
     $windows = $root.FindAll(
         [System.Windows.Automation.TreeScope]::Children,
         $condition
     )
-
-    foreach ($window in $windows) {
+    foreach ($w in $windows) {
         try {
-            $name = $window.Current.Name
+            $name = $w.Current.Name
             if ($name -and $name -like "*$Title*") {
-                return $window
+                return $w
             }
-        } catch {
-            # Window may have vanished between enumeration and property read
-            continue
-        }
+        } catch { continue }
     }
 
     return $null
