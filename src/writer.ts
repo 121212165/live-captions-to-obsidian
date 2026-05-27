@@ -26,7 +26,7 @@ export class ObsidianWriter {
   private currentDate: string;
   private notesDir: string;
 
-  constructor(private config: Config) {
+  constructor(config: Config) {
     this.notesDir = path.join(config.vaultPath, config.notesDir);
     fs.mkdirSync(this.notesDir, { recursive: true });
     this.currentDate = formatDate(new Date());

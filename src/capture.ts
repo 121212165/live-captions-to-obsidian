@@ -99,7 +99,12 @@ export class CaptureService extends EventEmitter {
     });
 
     this.process.on("error", (err) => this.emit("error", err));
-    this.process.on("close", () => this.emit("gone"));
+    this.process.on("close", (code) => {
+      if (code !== 0) {
+        console.error(`[capture] 进程异常退出 code=${code}`);
+      }
+      this.emit("gone");
+    });
   }
 
   stop(): void {

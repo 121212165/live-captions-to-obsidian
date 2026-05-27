@@ -10,19 +10,47 @@ Write-Host "[OK] Capture tool started in background" -ForegroundColor Green
 # 2. Wait for tool to initialize
 Start-Sleep -Seconds 2
 
-# 3. Simulate Win+Ctrl+L to open Live Captions
-$sig = '[DllImport("user32.dll")]public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, int dwExtraInfo);'
-$kb = Add-Type -MemberDefinition $sig -Name KB -Namespace W32 -PassThru
+# 3. Try to launch Live Captions directly (preferred, avoids keyboard simulation)
+$lcFound = $false
+$lcPaths = @(
+    "$env:LOCALAPPDATA\Microsoft\WindowsApps\LiveCaptions.exe"
+)
+foreach ($p in $lcPaths) {
+    if (Test-Path $p) {
+        try {
+            Start-Process -FilePath $p -WindowStyle Normal
+            Write-Host "[OK] Live Captions launched" -ForegroundColor Green
+            $lcFound = $true
+            break
+        } catch {
+            Write-Host "[WARN] Failed to launch Live Captions directly: $_" -ForegroundColor Yellow
+        }
+    }
+}
 
-$kb::keybd_event(0x5B, 0, 0, 0)   # Win down
-$kb::keybd_event(0x11, 0, 0, 0)   # Ctrl down
-$kb::keybd_event(0x4C, 0, 0, 0)   # L down
-Start-Sleep -Milliseconds 100
-$kb::keybd_event(0x4C, 0, 2, 0)   # L up
-$kb::keybd_event(0x11, 0, 2, 0)   # Ctrl up
-$kb::keybd_event(0x5B, 0, 2, 0)   # Win up
+# 4. Fallback: simulate Win+Ctrl+L using SendKeys
+if (-not $lcFound) {
+    Write-Host "[INFO] Falling back to keyboard shortcut Win+Ctrl+L..." -ForegroundColor Yellow
+    try {
+        Add-Type -AssemblyName System.Windows.Forms
+        [System.Windows.Forms.SendKeys]::SendWait("^{Win}{L}")
+        Write-Host "[OK] Keyboard shortcut sent" -ForegroundColor Green
+    } catch {
+        # Ultimate fallback: old keybd_event method
+        Write-Host "[WARN] SendKeys failed, trying keybd_event..." -ForegroundColor Yellow
+        $sig = '[DllImport("user32.dll")]public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, int dwExtraInfo);'
+        $kb = Add-Type -MemberDefinition $sig -Name KB -Namespace W32 -PassThru
+        $kb::keybd_event(0x5B, 0, 0, 0)   # Win down
+        $kb::keybd_event(0x11, 0, 0, 0)   # Ctrl down
+        $kb::keybd_event(0x4C, 0, 0, 0)   # L down
+        Start-Sleep -Milliseconds 100
+        $kb::keybd_event(0x4C, 0, 2, 0)   # L up
+        $kb::keybd_event(0x11, 0, 2, 0)   # Ctrl up
+        $kb::keybd_event(0x5B, 0, 2, 0)   # Win up
+        Write-Host "[OK] Fallback keyboard shortcut sent" -ForegroundColor Green
+    }
+}
 
-Write-Host "[OK] Live Captions opened" -ForegroundColor Green
 Write-Host ""
 Write-Host "Everything is running. Close this window." -ForegroundColor Yellow
 Write-Host "Subtitles auto-save to: $env:USERPROFILE\Documents\Obsidian\notes\" -ForegroundColor Cyan

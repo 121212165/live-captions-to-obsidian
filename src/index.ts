@@ -1,4 +1,5 @@
 import { defaultConfig, Config } from "./config.js";
+import { parseArgs, printHelp, printVersion, validateConfig } from "./cli.js";
 import { WindowMonitor } from "./monitor.js";
 import { CaptureService } from "./capture.js";
 import { ObsidianWriter } from "./writer.js";
@@ -10,18 +11,26 @@ const DIM = "\x1b[2m";
 const RED = "\x1b[31m";
 const RESET = "\x1b[0m";
 
-function parseArgs(): Partial<Config> {
-  const args = process.argv.slice(2);
-  const overrides: Partial<Config> = {};
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--vault" && args[i + 1]) overrides.vaultPath = args[++i];
-    if (args[i] === "--dir" && args[i + 1]) overrides.notesDir = args[++i];
-    if (args[i] === "--title" && args[i + 1]) overrides.windowTitle = args[++i];
-  }
-  return overrides;
+const { config: cliOverrides, options: cliOptions } = parseArgs(process.argv.slice(2));
+
+if (cliOptions.help) {
+  printHelp();
+  process.exit(0);
+}
+if (cliOptions.version) {
+  printVersion();
+  process.exit(0);
 }
 
-const config: Config = { ...defaultConfig, ...parseArgs() };
+const config: Config = { ...defaultConfig, ...cliOverrides };
+
+const configErrors = validateConfig(config);
+if (configErrors.length > 0) {
+  console.error(`${RED}[错误]${RESET} 配置验证失败:`);
+  configErrors.forEach((err) => console.error(`  - ${err}`));
+  process.exit(1);
+}
+
 let lineCount = 0;
 let writer: ObsidianWriter | null = null;
 let capture: CaptureService | null = null;
@@ -64,6 +73,7 @@ function startCapture() {
 function cleanupCapture() {
   if (capture) {
     capture.stop();
+    capture.resetDedup();
     capture = null;
   }
   writer = null;
@@ -103,4 +113,22 @@ process.on("SIGINT", () => {
   cleanupCapture();
   monitor.stop();
   process.exit(0);
+});
+
+process.on("SIGTERM", () => {
+  console.log(`\n${DIM}收到 SIGTERM，正在退出...${RESET}`);
+  cleanupCapture();
+  monitor.stop();
+  process.exit(0);
+});
+
+process.on("uncaughtException", (err) => {
+  console.error(`${RED}[致命错误]${RESET} 未捕获异常: ${err.message}`);
+  cleanupCapture();
+  monitor.stop();
+  process.exit(1);
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.error(`${RED}[致命错误]${RESET} 未处理的 Promise 拒绝: ${reason}`);
 });

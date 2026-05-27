@@ -68,7 +68,9 @@ export class WindowMonitor extends EventEmitter {
 
     this.process.on("error", (err) => this.emit("error", err));
     this.process.on("close", (code) => {
-      console.error(`[monitor] 进程退出 code=${code}`);
+      if (code !== 0) {
+        console.error(`[monitor] 进程异常退出 code=${code}`);
+      }
       if (wasFound) {
         this.emit("gone");
         wasFound = false;

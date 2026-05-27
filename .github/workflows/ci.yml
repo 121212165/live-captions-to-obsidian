@@ -6,53 +6,101 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build:
-    runs-on: windows-latest
-
-    strategy:
-      matrix:
-        node-version: [18, 20, 22]
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ matrix.node-version }}
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: TypeScript check
-        run: npx tsc --noEmit
-
-      - name: PowerShell syntax check
-        run: |
-          $errors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile('src/scripts/uia-capture.ps1', [ref]$null, [ref]$errors)
-          if ($errors.Count -gt 0) {
-            $errors | ForEach-Object { Write-Error $_.ToString() }
-            exit 1
-          }
-          Write-Host "PowerShell syntax OK"
-        shell: pwsh
-
   lint:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Use Node.js 20
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
+      - run: npm ci
+      - run: npx eslint src/
 
-      - name: Install dependencies
-        run: npm ci
+  typecheck:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        node-version: [18, 20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - run: npm ci
+      - run: npx tsc --noEmit
 
-      - name: Check TypeScript compilation
-        run: npx tsc --noEmit
+  powershell-check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check all PowerShell scripts syntax
+        shell: pwsh
+        run: |
+          $scripts = @(
+            'src/scripts/uia-capture.ps1',
+            'launcher.ps1'
+          )
+          $hasError = $false
+          foreach ($script in $scripts) {
+            if (-not (Test-Path $script)) {
+              Write-Warning "SKIP: $script (not found)"
+              continue
+            }
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($script, [ref]$null, [ref]$errors)
+            if ($errors.Count -gt 0) {
+              $hasError = $true
+              $errors | ForEach-Object { Write-Error "$script : $_" }
+            } else {
+              Write-Host "OK: $script"
+            }
+          }
+          if ($hasError) { exit 1 }
+
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npx vitest run --reporter=verbose
+
+  build:
+    runs-on: windows-latest
+    needs: [lint, typecheck, test, powershell-check]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npx tsc
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 7
+
+  audit:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm audit --audit-level=high
+        continue-on-error: true
