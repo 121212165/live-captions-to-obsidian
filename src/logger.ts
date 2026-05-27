@@ -80,6 +80,13 @@ export class Logger {
   }
 }
 
+export interface LoggerLike {
+  info(tag: string, message: string): void;
+  error(tag: string, message: string): void;
+  debug(tag: string, message: string): void;
+  warn(tag: string, message: string): void;
+}
+
 // 默认 logger 实例（无配置 fallback）
 let defaultLogger: Logger | null = null;
 

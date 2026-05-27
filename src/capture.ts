@@ -1,124 +1,101 @@
-import { spawn, ChildProcess } from "child_process";
-import { EventEmitter } from "events";
 import path from "path";
 import { fileURLToPath } from "url";
 import { Config } from "./config.js";
+import { PsProcess } from "./lib/ps-process.js";
+import { TypedEventEmitter } from "./lib/typed-event-emitter.js";
+import { extractNewLines } from "./lib/dedup.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-export interface CaptureEvents {
-  text: (lines: string[]) => void;
-  gone: () => void;
-  error: (err: Error) => void;
+interface LoggerLike {
+  info(tag: string, message: string): void;
+  error(tag: string, message: string): void;
+  debug(tag: string, message: string): void;
 }
 
-export class CaptureService extends EventEmitter {
-  private process: ChildProcess | null = null;
+const TAG = "capture";
+
+export interface CaptureEvents {
+  text: [lines: string[]];
+  gone: [];
+  error: [err: Error];
+  [key: string]: unknown[];
+}
+
+export class CaptureService extends TypedEventEmitter<CaptureEvents> {
+  private psProcess: PsProcess | null = null;
   private prevText = "";
+  private goneEmitted = false;
   private scriptPath: string;
+  private logger: LoggerLike;
 
-  constructor(private config: Config) {
+  constructor(
+    private config: Config,
+    logger?: LoggerLike,
+  ) {
     super();
-    this.scriptPath = path.join(__dirname, "scripts", "uia-capture.ps1");
-  }
-
-  /**
-   * Extract truly new content from accumulated text.
-   * Live Captions returns a single growing text block per poll.
-   * We compare against the previous full text to find only the delta.
-   */
-  private extractNewLines(rawLines: string[]): string[] {
-    const currentText = rawLines.join("\n");
-    if (!currentText) return [];
-
-    let newContent: string;
-    if (currentText.startsWith(this.prevText)) {
-      // Normal case: text grew by appending
-      newContent = currentText.substring(this.prevText.length);
-    } else {
-      // Text was rewritten — find longest common prefix
-      let i = 0;
-      while (i < currentText.length && i < this.prevText.length && currentText[i] === this.prevText[i]) {
-        i++;
-      }
-      newContent = currentText.substring(i);
-      // Deduplicate: if the new content overlaps with the tail of prevText, take only the non-overlapping suffix
-      const prevTail = this.prevText.substring(i);
-      if (prevTail && newContent.startsWith(prevTail)) {
-        newContent = newContent.substring(prevTail.length);
-      }
-    }
-    this.prevText = currentText;
-
-    if (!newContent.trim()) return [];
-    return newContent.split("\n").filter((l) => l.trim().length > 0);
+    this.scriptPath = path.join(__dirname, "scripts", "read-captions.ps1");
+    this.logger = logger ?? {
+      info: (_t, m) => console.log(`[INFO] ${m}`),
+      error: (_t, m) => console.error(`[ERROR] ${m}`),
+      debug: (_t, m) => console.debug(`[DEBUG] ${m}`),
+    };
   }
 
   start(): void {
     this.prevText = "";
-    this.process = spawn("powershell", [
-      "-NoProfile",
-      "-ExecutionPolicy", "Bypass",
-      "-File", this.scriptPath,
-    ], { stdio: ["pipe", "pipe", "pipe"] });
+    this.goneEmitted = false;
 
-    // Send capture command
-    const cmd = JSON.stringify({
+    this.psProcess = new PsProcess();
+
+    this.psProcess.start({
+      scriptPath: this.scriptPath,
+      onMessage: (msg: unknown) => {
+        const parsed = msg as { type: string; lines?: string[] };
+        if (parsed.type === "text" && Array.isArray(parsed.lines)) {
+          const result = extractNewLines(parsed.lines, this.prevText);
+          this.prevText = result.currentText;
+          if (result.newLines.length > 0) {
+            this.emit("text", result.newLines);
+          }
+        } else if (parsed.type === "gone") {
+          this.goneEmitted = true;
+          this.emit("gone");
+        } else if (parsed.type === "heartbeat") {
+          this.logger.debug(TAG, "heartbeat received");
+        }
+      },
+      onError: (err: Error) => {
+        this.emit("error", err);
+      },
+      onClose: (code: number | null) => {
+        if (code !== 0) {
+          this.logger.error(TAG, `进程异常退出 code=${code}`);
+        }
+        if (!this.goneEmitted) {
+          this.goneEmitted = true;
+          this.emit("gone");
+        }
+      },
+    });
+
+    this.psProcess.sendCommand({
       cmd: "capture",
       title: this.config.windowTitle,
       interval: this.config.captureInterval,
-    }) + "\n";
-    this.process.stdin?.write(cmd);
-
-    // Drain stderr to prevent process blocking
-    this.process.stderr?.on("data", (data: Buffer) => {
-      const msg = data.toString().trim();
-      if (msg) console.error(`[capture:stderr] ${msg}`);
-    });
-
-    let buffer = "";
-    this.process.stdout?.on("data", (data: Buffer) => {
-      buffer += data.toString();
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-        try {
-          const msg = JSON.parse(trimmed);
-          if (msg.type === "text" && Array.isArray(msg.lines)) {
-            const newLines = this.extractNewLines(msg.lines);
-            if (newLines.length > 0) {
-              this.emit("text", newLines);
-            }
-          } else if (msg.type === "gone") {
-            this.emit("gone");
-          }
-        } catch (e) { console.debug("[capture] ignoring non-JSON line:", e); }
-      }
-    });
-
-    this.process.on("error", (err) => this.emit("error", err));
-    this.process.on("close", (code) => {
-      if (code !== 0) {
-        console.error(`[capture] 进程异常退出 code=${code}`);
-      }
-      this.emit("gone");
     });
   }
 
-  stop(): void {
-    if (this.process) {
-      try {
-        this.process.stdin?.write(JSON.stringify({ cmd: "exit" }) + "\n");
-        setTimeout(() => this.process?.kill(), 500);
-      } catch (e) { console.error("[capture] failed to send exit, force killing:", e); this.process.kill(); }
-      this.process = null;
+  async stop(): Promise<void> {
+    if (this.psProcess) {
+      await this.psProcess.stop();
+      this.psProcess = null;
     }
     this.prevText = "";
   }
 
   resetDedup(): void {
     this.prevText = "";
+    this.goneEmitted = false;
   }
 }

@@ -33,31 +33,32 @@ export class ObsidianWriter {
     this.filePath = path.join(this.notesDir, `字幕-${this.currentDate}.md`);
   }
 
-  beginSession(): void {
+  async beginSession(): Promise<void> {
     const now = new Date();
-    if (!this.fileCreated && !fs.existsSync(this.filePath)) {
+    const exists = await fs.promises.access(this.filePath).then(() => true).catch(() => false);
+
+    if (!exists && !this.fileCreated) {
       const header = `# 字幕笔记 - ${formatDisplayDate(now)}\n\n`;
-      fs.writeFileSync(this.filePath, header, "utf-8");
+      await fs.promises.writeFile(this.filePath, header, "utf-8");
       this.fileCreated = true;
     } else {
-      // Append separator for subsequent sessions
-      fs.appendFileSync(this.filePath, "\n---\n\n", "utf-8");
+      await fs.promises.appendFile(this.filePath, "\n---\n\n", "utf-8");
     }
-    fs.appendFileSync(this.filePath, `> ${formatTime(now)} 开始捕获\n\n`, "utf-8");
+    await fs.promises.appendFile(this.filePath, `> ${formatTime(now)} 开始捕获\n\n`, "utf-8");
   }
 
-  writeLines(lines: string[]): void {
+  async writeLines(lines: string[]): Promise<void> {
     const now = new Date();
     const today = formatDate(now);
     if (today !== this.currentDate) {
       this.currentDate = today;
       this.filePath = path.join(this.notesDir, `字幕-${today}.md`);
       this.fileCreated = false;
-      this.beginSession();
+      await this.beginSession();
     }
     const time = formatTime(now);
     const content = lines.map((line) => `${time} | ${line}`).join("\n") + "\n";
-    fs.appendFileSync(this.filePath, content, "utf-8");
+    await fs.promises.appendFile(this.filePath, content, "utf-8");
   }
 
   getFilePath(): string {

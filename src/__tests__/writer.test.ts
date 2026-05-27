@@ -31,9 +31,9 @@ describe("ObsidianWriter", () => {
     expect(existsSync(dirPath)).toBe(true);
   });
 
-  it("beginSession 创建文件头", () => {
+  it("beginSession 创建文件头", async () => {
     const writer = createWriter();
-    writer.beginSession();
+    await writer.beginSession();
     const filePath = writer.getFilePath();
     expect(existsSync(filePath)).toBe(true);
     const content = readFileSync(filePath, "utf-8");
@@ -44,13 +44,13 @@ describe("ObsidianWriter", () => {
     expect(content).toContain("开始捕获");
   });
 
-  it("beginSession 文件已存在时追加分隔符而非重复文件头", () => {
+  it("beginSession 文件已存在时追加分隔符而非重复文件头", async () => {
     const writer = createWriter();
-    writer.beginSession();
+    await writer.beginSession();
     const filePath = writer.getFilePath();
 
     // 第二次 beginSession
-    writer.beginSession();
+    await writer.beginSession();
     const secondContent = readFileSync(filePath, "utf-8");
 
     // 第二次调用应当追加 --- 分隔符，而非重复文件头
@@ -60,14 +60,14 @@ describe("ObsidianWriter", () => {
     expect(headerCount).toBe(1);
   });
 
-  it("writeLines 写入带时间戳的内容", () => {
+  it("writeLines 写入带时间戳的内容", async () => {
     const writer = createWriter();
-    writer.beginSession();
+    await writer.beginSession();
 
     const filePath = writer.getFilePath();
     const beforeSize = readFileSync(filePath, "utf-8").length;
 
-    writer.writeLines(["测试字幕行1", "测试字幕行2"]);
+    await writer.writeLines(["测试字幕行1", "测试字幕行2"]);
 
     const afterContent = readFileSync(filePath, "utf-8");
     expect(afterContent.length).toBeGreaterThan(beforeSize);
@@ -81,13 +81,13 @@ describe("ObsidianWriter", () => {
     }
   });
 
-  it("多次 writeLines 持续追加内容", () => {
+  it("多次 writeLines 持续追加内容", async () => {
     const writer = createWriter();
-    writer.beginSession();
+    await writer.beginSession();
 
-    writer.writeLines(["第一行"]);
-    writer.writeLines(["第二行"]);
-    writer.writeLines(["第三行"]);
+    await writer.writeLines(["第一行"]);
+    await writer.writeLines(["第二行"]);
+    await writer.writeLines(["第三行"]);
 
     const content = readFileSync(writer.getFilePath(), "utf-8");
     expect(content).toContain("第一行");

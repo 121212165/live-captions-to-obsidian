@@ -1,94 +1,91 @@
-import { spawn, ChildProcess } from "child_process";
-import { EventEmitter } from "events";
 import path from "path";
 import { fileURLToPath } from "url";
 import { Config } from "./config.js";
+import { PsProcess } from "./lib/ps-process.js";
+import { TypedEventEmitter } from "./lib/typed-event-emitter.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-export interface MonitorEvents {
-  appear: () => void;
-  gone: () => void;
-  error: (err: Error) => void;
+export type MonitorEvents = {
+  appear: [];
+  gone: [];
+  error: [Error];
+};
+
+export interface LoggerLike {
+  info(tag: string, message: string): void;
+  error(tag: string, message: string): void;
+  debug(tag: string, message: string): void;
 }
 
-export class WindowMonitor extends EventEmitter {
-  private process: ChildProcess | null = null;
-  private scriptPath: string;
+export class WindowMonitor extends TypedEventEmitter<MonitorEvents> {
+  private psProcess: PsProcess | null = null;
+  private readonly scriptPath: string;
+  private readonly logger: LoggerLike;
 
-  constructor(private config: Config) {
+  constructor(
+    private readonly config: Config,
+    logger?: LoggerLike,
+  ) {
     super();
-    this.scriptPath = path.join(__dirname, "scripts", "uia-capture.ps1");
+    this.scriptPath = path.join(__dirname, "scripts", "watch-window.ps1");
+    this.logger = logger ?? {
+      info: (_tag, message) => console.log(`[monitor] ${message}`),
+      error: (_tag, message) => console.error(`[monitor] ${message}`),
+      debug: (_tag, message) => console.debug(`[monitor] ${message}`),
+    };
   }
 
   start(): void {
-    this.process = spawn("powershell", [
-      "-NoProfile",
-      "-ExecutionPolicy", "Bypass",
-      "-File", this.scriptPath,
-    ], { stdio: ["pipe", "pipe", "pipe"] });
+    this.psProcess = new PsProcess();
 
-    // Send watch command
-    const cmd = JSON.stringify({
+    let wasFound = false;
+
+    this.psProcess.start({
+      scriptPath: this.scriptPath,
+      onMessage: (msg: unknown) => {
+        const record = msg as Record<string, unknown>;
+
+        if (record.type === "status") {
+          const found = record.found === true;
+          if (found && !wasFound) {
+            this.emit("appear");
+          } else if (!found && wasFound) {
+            this.emit("gone");
+          }
+          wasFound = found;
+        } else if (record.type === "heartbeat") {
+          this.logger.debug("[monitor]", "heartbeat received");
+        }
+      },
+      onError: (err: Error) => {
+        this.emit("error", err);
+      },
+      onClose: (code: number | null) => {
+        if (code !== 0) {
+          this.logger.error("[monitor]", `process exited with code=${code}`);
+        }
+        if (wasFound) {
+          this.emit("gone");
+          wasFound = false;
+        }
+      },
+      onStderr: (line: string) => {
+        this.logger.error("[monitor:stderr]", line);
+      },
+    });
+
+    this.psProcess.sendCommand({
       cmd: "watch",
       title: this.config.windowTitle,
       interval: this.config.watchInterval,
-    }) + "\n";
-    this.process.stdin?.write(cmd);
-
-    // Drain stderr to prevent process blocking
-    this.process.stderr?.on("data", (data: Buffer) => {
-      const msg = data.toString().trim();
-      if (msg) console.error(`[monitor:stderr] ${msg}`);
-    });
-
-    let wasFound = false;
-    let buffer = "";
-    this.process.stdout?.on("data", (data: Buffer) => {
-      buffer += data.toString();
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-        try {
-          const msg = JSON.parse(trimmed);
-          if (msg.type === "status") {
-            const found = msg.found === true;
-            if (found && !wasFound) {
-              this.emit("appear");
-            } else if (!found && wasFound) {
-              this.emit("gone");
-            }
-            wasFound = found;
-          }
-        } catch (e) { console.debug("[monitor] ignoring non-JSON line:", e); }
-      }
-    });
-
-    this.process.on("error", (err) => this.emit("error", err));
-    this.process.on("close", (code) => {
-      if (code !== 0) {
-        console.error(`[monitor] 进程异常退出 code=${code}`);
-      }
-      if (wasFound) {
-        this.emit("gone");
-        wasFound = false;
-      }
     });
   }
 
-  stop(): void {
-    if (this.process) {
-      try {
-        this.process.stdin?.write(JSON.stringify({ cmd: "exit" }) + "\n");
-        setTimeout(() => {
-          try { this.process?.kill(); } catch (e) { console.error("[monitor] failed to kill process after exit command:", e); }
-        }, 500);
-      } catch {
-        try { this.process.kill(); } catch (e) { console.error("[monitor] failed to force-kill process:", e); }
-      }
-      this.process = null;
+  async stop(): Promise<void> {
+    if (this.psProcess) {
+      await this.psProcess.stop();
+      this.psProcess = null;
     }
   }
 }

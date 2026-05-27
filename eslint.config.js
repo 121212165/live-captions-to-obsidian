@@ -34,4 +34,10 @@ export default [
       "max-lines": "off",
     },
   },
+  {
+    files: ["src/index.ts", "src/cli.ts", "src/logger.ts", "src/lifecycle.ts", "src/app.ts", "src/monitor.ts", "src/capture.ts", "src/config-loader.ts", "src/lib/typed-event-emitter.ts"],
+    rules: {
+      "no-console": "off",
+    },
+  },
 ];

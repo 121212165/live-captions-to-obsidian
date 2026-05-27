@@ -10,7 +10,7 @@ export interface Config {
 }
 
 export const defaultConfig: Config = {
-  vaultPath: process.env.OBSIDIAN_VAULT_PATH || path.join(os.homedir(), "Documents", "Obsidian"),
+  vaultPath: path.join(os.homedir(), "Documents", "Obsidian"),
   notesDir: "notes",
   watchInterval: 2000,
   captureInterval: 500,

@@ -1,481 +1,414 @@
-# Live Captions to Obsidian — 重构计划
+# Live Captions to Obsidian — Refactoring Plan v2
 
-> 生成日期：2026-05-27
-> 由 5 个子代理（架构、代码质量、安全、开发体验、CI/CD）并行分析汇编
-
----
-
-## 目录
-
-1. [架构与设计重构](#1-架构与设计重构)
-2. [代码质量与测试](#2-代码质量与测试)
-3. [PowerShell 脚本安全与健壮性](#3-powershell-脚本安全与健壮性)
-4. [开发体验与配置系统](#4-开发体验与配置系统)
-5. [CI/CD 与 GitHub 集成](#5-cicd-与-github-集成)
-6. [优先级路线图](#6-优先级路线图)
+> Generated: 2026-05-27
+> Method: 5 parallel expert agents (Architect, TypeScript Quality, Security, DX, CI/CD)
+> Status: Analysis complete, ready for execution
 
 ---
 
-## 1. 架构与设计重构
+## Executive Summary
 
-### 1.1 当前架构评估
+The project completed Phase 1 of a refactor (extracted `lib/ps-process.ts`, `lib/typed-event-emitter.ts`, `lib/dedup.ts`, `config-loader.ts`, `logger.ts`, split PS1 scripts) but **never wired the new code into the consuming modules**. Result: ~400 lines of dead library code alongside ~80 lines of duplicated inline logic.
 
-| 模块 | 文件 | 职责 | 问题 |
-|------|------|------|------|
-| Entry | `src/index.ts` | CLI 解析、编排、状态管理、console.log | 职责过多，状态散落 |
-| Config | `src/config.ts` | Config 接口、默认值 | 违反接口隔离原则 |
-| WindowMonitor | `src/monitor.ts` | 轮询窗口存在性 | 与 CaptureService 大量重复代码 |
-| CaptureService | `src/capture.ts` | 字幕文本提取、去重 | 去重逻辑是私有方法不可测 |
-| ObsidianWriter | `src/writer.ts` | Markdown 文件写入 | 同步 I/O 阻塞事件循环 |
-| PS1 脚本 | `src/scripts/uia-capture.ps1` | 全部 PowerShell UIA 逻辑 | 单文件承载双职责 |
+**Core task:** Wire the existing refactored modules into production code, delete the dead monolith, decompose the god module, and close test/CI gaps.
 
-### 1.2 关键问题
+---
 
-1. **EventEmitter 类型不安全** — `emit("text", lines)` 无编译期检查事件名和参数类型
-2. **PS1 单文件双职责** — `Invoke-Watch` 和 `Invoke-Capture` 在同一个文件中
-3. **进程生命周期管理重复** — `monitor.ts` 和 `capture.ts` 各有完全相同的 spawn/stdin/stderr/stop 模式
-4. **模块间紧耦合** — `index.ts` 直接 `new` 所有服务，无法单独测试编排逻辑
-5. **Config 违反接口隔离** — 每个模块接收完整 `Config` 但实际只用其中几个字段
-6. **双重 gone 事件** — PS1 主动发 `gone` + `close` 事件再发一次，可能导致重复
-7. **`extractNewLines` 不可测试** — 纯函数逻辑但作为私有方法
+## Diagnosis by Role
 
-### 1.3 重构方案
+### Architect
+- `index.ts` is a god module (CLI + config + orchestration + state + events + cleanup)
+- `monitor.ts` and `capture.ts` duplicate ~40 lines of spawn/parse/kill each
+- Double-"gone" event: `capture.ts` emits from both PS1 message and process close
+- `config-loader.ts` has a complete 4-layer cascade that `index.ts` ignores
 
-#### 1.3.1 类型安全事件系统
+### TypeScript Quality
+- 4 HIGH dead-code findings: `lib/ps-process.ts`, `lib/typed-event-emitter.ts`, `lib/dedup.ts`, `logger.ts` never imported
+- `capture.ts` dedup private method diverged from `lib/dedup.ts` (extra overlap branch)
+- Sync I/O in `writer.ts` blocks event loop during caption writes
+- 6 of 9 source modules have zero test coverage
 
-创建 `src/lib/typed-event-emitter.ts`，使用泛型约束 `emit`/`on` 的事件名和参数类型：
+### Security
+- No CRITICAL or HIGH findings
+- One MEDIUM: `uia-capture.ps1` uses deprecated `LoadWithPartialName` (new `.psm1` already fixed this)
+- All other risks LOW and acceptable for a local desktop tool
+
+### Developer Experience
+- `--verbose`, `--log-file`, `--no-color` CLI flags parsed but never reach Logger
+- Env var name mismatch: `OBSIDIAN_VAULT_PATH` (config.ts) vs `LIVE_CAPTIONS_VAULT` (config-loader.ts)
+- 4 overlapping launcher scripts with no documented entry point
+- README is stale: missing `cli.ts`, `config-loader.ts`, `logger.ts`; wrong sample output language
+
+### CI/CD
+- `tsc --noEmit` passes, ESLint passes (41 warnings), vitest passes (24/24)
+- CI powershell-check only covers 2 of 5 PS1/PSM1 files
+- Build artifact (`dist/`) is useless: no `bin` field, no asset copy, app only runs via `tsx`
+- `@vitest/coverage-v8` missing from devDeps, `test:coverage` script would fail
+- `lint-staged` config exists but no pre-commit hook to trigger it
+
+---
+
+## Phase 1: Wire Refactored Modules (P0)
+
+> Goal: Eliminate all dead code by connecting it to production paths.
+
+### 1.1 `monitor.ts` — Use PsProcess + TypedEventEmitter + split script
+
+**Before:** 95 lines, manual spawn, raw EventEmitter, spawns `uia-capture.ps1` with `cmd: "watch"`.
+
+**After:**
+```
+- Extend TypedEventEmitter<MonitorEvents> instead of EventEmitter
+- Replace inline spawn/stdout/stderr/kill with PsProcess
+- Spawn watch-window.ps1 instead of uia-capture.ps1 (no cmd JSON needed)
+- Remove ~40 lines of duplicated process management
+```
+
+### 1.2 `capture.ts` — Use PsProcess + TypedEventEmitter + dedup.ts + split script
+
+**Before:** 124 lines, manual spawn, raw EventEmitter, inline `extractNewLines`, spawns `uia-capture.ps1`.
+
+**After:**
+```
+- Extend TypedEventEmitter<CaptureEvents> instead of EventEmitter
+- Replace inline spawn/stdout/stderr/kill with PsProcess
+- Import extractNewLines from lib/dedup.ts (delete private method)
+- Merge the extra overlap-dedup branch from the private method into lib/dedup.ts
+- Spawn read-captions.ps1 instead of uia-capture.ps1
+- Add goneEmitted flag to prevent double-gone (see 1.4)
+- Remove ~50 lines of duplicated code
+```
+
+### 1.3 Delete `src/scripts/uia-capture.ps1`
+
+The monolith is fully superseded by `watch-window.ps1` + `read-captions.ps1` + `uia-common.psm1`:
+- Shared UIA logic via `.psm1` module (no duplication)
+- `trap` error handling (monolith lacks this)
+- Heartbeat messages for health monitoring
+- `ConvertTo-Json` instead of manual string formatting
+
+### 1.4 Fix double-"gone" event
+
+**Root cause:** `capture.ts` emits `"gone"` when PS1 sends `{"type":"gone"}` AND again on process close (PS1 exits after returning from `Invoke-Capture`).
+
+**Fix:** Add `goneEmitted` boolean to `CaptureService`. Set `true` on PS1 "gone" message. In close handler, only emit if `!goneEmitted`.
+
+### 1.5 Sync up `lib/dedup.ts` with `capture.ts` private method
+
+The private method in `capture.ts:46-49` has an extra overlap-dedup branch not in `lib/dedup.ts`. Merge it:
 
 ```typescript
-type EventMap = Record<string, any[]>;
-
-class TypedEventEmitter<Events extends EventMap> {
-  on<K extends keyof Events>(event: K, listener: (...args: Events[K]) => void): void;
-  emit<K extends keyof Events>(event: K, ...args: Events[K]): void;
-  off<K extends keyof Events>(event: K, listener: (...args: Events[K]) => void): void;
+// Add to lib/dedup.ts after finding the LCP split point:
+const prevTail = prevText.substring(i);
+if (prevTail && newContent.startsWith(prevTail)) {
+  newContent = newContent.substring(prevTail.length);
 }
 ```
 
-#### 1.3.2 抽取 PsProcess 类
+---
 
-创建 `src/lib/ps-process.ts`，封装 PowerShell 子进程的完整生命周期：
+## Phase 2: Decompose `index.ts` (P0)
 
-- `start()` — spawn + pipe setup
-- `sendCommand()` — stdin JSON 写入
-- `stop()` — 优雅关闭（send exit → wait → kill）
-- 自动 JSON 行解析、stderr drain、健康检查
+> Goal: Break the god module into single-responsibility units.
 
-消除 `monitor.ts`/`capture.ts` 中重复的进程管理代码。
-
-#### 1.3.3 服务接口与编排层
-
-定义 `IWindowMonitor` / `ICaptureService` / `IWriter` 接口，创建 `CaptureOrchestrator` 承担编排职责：
+### 2.1 Create `src/app.ts` — Application orchestrator
 
 ```
-index.ts → parse CLI → create services → CaptureOrchestrator.start()
-CaptureOrchestrator 管理: isCapturing, lineCount, 事件编排
+class Application {
+  constructor(config: Config, logger: Logger)
+
+  start(): void
+    - Create WindowMonitor, CaptureService, ObsidianWriter
+    - Wire events: monitor.appear → startCapture, monitor.gone → cleanupCapture
+    - Wire events: capture.text → writer.writeLines, capture.gone → cleanupCapture
+
+  stop(): void
+    - cleanupCapture(), monitor.stop(), logger.destroy()
+
+  Private: isCapturing, lineCount, capture, writer
+}
 ```
 
-#### 1.3.4 提取去重为纯函数
+### 2.2 Create `src/lifecycle.ts` — Signal handlers
 
-`src/lib/dedup.ts` — `extractNewLines(rawLines, prevText)` 纯函数，独立可测。
+```
+export function registerLifecycle(app: Application): void
+  - SIGINT → app.stop() → process.exit(0)
+  - SIGTERM → app.stop() → process.exit(0)
+  - uncaughtException → log, app.stop() → process.exit(1)
+  - unhandledRejection → log
+```
 
-#### 1.3.5 按接口隔离 Config
+### 2.3 Slim `src/index.ts` to ~20 lines
 
 ```typescript
-interface WatchConfig { windowTitle: string; watchInterval: number; }
-interface CaptureConfig { windowTitle: string; captureInterval: number; }
-interface WriterConfig { vaultPath: string; notesDir: string; }
-```
+import { parseArgs, printHelp, printVersion, validateConfig } from "./cli.js";
+import { resolveConfig } from "./config-loader.js";
+import { Logger } from "./logger.js";
+import { Application } from "./app.js";
+import { registerLifecycle } from "./lifecycle.js";
 
-### 1.4 重构后架构
+const { config: cliOverrides, options: cliOptions } = parseArgs(process.argv.slice(2));
+if (cliOptions.help) { printHelp(); process.exit(0); }
+if (cliOptions.version) { printVersion(); process.exit(0); }
 
-```
-index.ts (CLI → 工厂 → orchestrator.start())
-    │
-    ▼
-CaptureOrchestrator
-    ├── WindowMonitor (→ PsProcess → watch-window.ps1)
-    ├── CaptureService (→ PsProcess → read-captions.ps1)
-    ├── ObsidianWriter (→ Markdown 文件)
-    └── ILogger (注入)
+const { config, sources } = resolveConfig(cliOverrides, cliOptions.configPath);
+const errors = validateConfig(config);
+if (errors.length > 0) { /* print errors */ process.exit(1); }
+
+const logger = new Logger({
+  level: cliOptions.verbose ? "debug" : "info",
+  verbose: cliOptions.verbose ?? false,
+  logFile: cliOptions.logFile,
+  noColor: cliOptions.noColor ?? false,
+});
+
+const app = new Application(config, logger);
+registerLifecycle(app);
+app.start();
 ```
 
 ---
 
-## 2. 代码质量与测试
+## Phase 3: Unify Config + Logger (P0)
 
-### 2.1 当前代码质量问题
+### 3.1 Activate `resolveConfig()`
 
-| 严重性 | 问题 | 文件位置 |
-|--------|------|----------|
-| P0 | 零测试覆盖 | 全项目 |
-| P0 | 空 catch 静默吞异常 | `monitor.ts:65`, `capture.ts:92,105` |
-| P0 | 无 uncaughtException/unhandledRejection 处理 | `index.ts` |
-| P1 | monitor + capture 重复 spawn 逻辑 | 两文件共 5 处重复模式 |
-| P1 | 日志无法按级别过滤 | 全项目 `console.log` |
-| P1 | CLI 参数解析无校验 | `index.ts:13-22` |
-| P2 | 同步文件 I/O 阻塞事件循环 | `writer.ts` |
-| P2 | EventEmitter emit 无类型约束 | `monitor.ts`, `capture.ts` |
-| P3 | 500ms kill 超时 magic number | `capture.ts:104`, `monitor.ts:83` |
+Replace `index.ts:25` (`{ ...defaultConfig, ...cliOverrides }`) with `resolveConfig(cliOverrides, cliOptions.configPath)`. This activates:
+- `.live-captions.json` auto-discovery
+- `LIVE_CAPTIONS_*` environment variables
+- `--config <path>` CLI flag
 
-### 2.2 测试基础设施
+### 3.2 Unify env var names
 
-**框架选择：Vitest**（ESM 原生支持，无需 Vite 配置，自动读取 tsconfig）
+**Decision:** Use `LIVE_CAPTIONS_VAULT` (the `config-loader.ts` convention). Remove `OBSIDIAN_VAULT_PATH` from `config.ts:13`.
+
+### 3.3 Wire Logger into all modules
+
+- `Application` receives `Logger` via constructor, passes to `WindowMonitor` and `CaptureService`
+- Replace all `console.log/error/debug` with `logger.info/error/debug`
+- Remove hardcoded ANSI color codes from `index.ts:7-12`
+- Add `src/index.ts`, `src/cli.ts`, `src/logger.ts` to ESLint `no-console` override (they legitimately use console for CLI output)
+
+---
+
+## Phase 4: Writer Async I/O (P1)
+
+### 4.1 Convert `writer.ts` to async
+
+```typescript
+// Before
+fs.writeFileSync(this.filePath, header, "utf-8");
+fs.appendFileSync(this.filePath, content, "utf-8");
+
+// After
+await fs.promises.writeFile(this.filePath, header, "utf-8");
+await fs.promises.appendFile(this.filePath, content, "utf-8");
+```
+
+- `beginSession()` → `async beginSession()`
+- `writeLines()` → `async writeLines()`
+- `Application.startCapture()` calls `writer.beginSession()` with `await`
+- `capture.on("text")` handler becomes async or queues writes
+
+### 4.2 File existence check at startup
+
+Add to `validateConfig()` or `Application.start()`:
+```typescript
+if (!fs.existsSync(config.vaultPath)) {
+  fs.mkdirSync(config.vaultPath, { recursive: true });
+}
+```
+
+---
+
+## Phase 5: Test Coverage (P1)
+
+### 5.1 New test files
+
+| Module | Test Strategy |
+|--------|--------------|
+| `cli.ts` | Unit: parseArgs with various argv combinations, validateConfig edge cases |
+| `config-loader.ts` | Unit: resolveConfig with mocked fs, test 4-layer precedence |
+| `logger.ts` | Unit: level filtering, file output, noColor mode |
+| `typed-event-emitter.ts` | Unit: on/off/emit/removeAllListeners, error in handler |
+| `app.ts` | Integration: mock PsProcess + mock Writer, verify event wiring |
+| `ps-process.ts` | Unit: mock child_process.spawn, test sendCommand/stop/kill |
+
+### 5.2 Fix `lib/dedup.ts` divergence
+
+The test file `dedup.test.ts` tests `lib/dedup.ts` but `capture.ts` uses a different inline version. After Phase 1.5 merges them, all existing tests continue to pass.
+
+### 5.3 Install coverage tooling
 
 ```bash
-npm install -D vitest
+npm install -D @vitest/coverage-v8
 ```
 
-**测试目录结构：**
-
-```
-src/
-├── __tests__/
-│   ├── config.test.ts        # 配置解析与合并
-│   ├── capture.test.ts       # extractNewLines 单元测试
-│   └── writer.test.ts        # 日期格式化、writeLines
-test/
-├── integration/
-│   ├── powershell-spawn.test.ts
-│   └── obsidian-writer.test.ts
-├── e2e/
-│   └── full-pipeline.test.ts
-└── fixtures/
-    └── mock-ps1-output.jsonl
-```
-
-**Mock 策略：** `vi.mock("child_process")` / `vi.mock("fs")` / 伪造 PS1 stdout 流
-
-### 2.3 `extractNewLines` 测试用例（优先级最高）
-
-| 场景 | 输入 | 预期 |
-|------|------|------|
-| 正常追加 | prevText="A\nB", lines=["A","B","C"] | ["C"] |
-| 完全重写 | prevText="旧", lines=["新"] | ["新"] |
-| 部分重写 | prevText="开始；旧", lines=["开始；新"] | ["新"] |
-| 空输入 | prevText="有", lines=[] | [] |
-| 无新内容 | prevText="相同", lines=["相同"] | [] |
-
-### 2.4 代码质量工具链
-
-**ESLint 规则重点：**
-- `no-console: "warn"` — 提醒 `console.log`，`console.error` 可例外
-- `no-empty: ["error", { allowEmptyCatch: false }]` — 禁止空 catch
-- `max-depth: ["warn", 4]` — 禁止 >4 层嵌套
-- `max-lines: ["warn", { max: 300 }]` — 每文件 <= 300 行
-
-**TypeScript 增强：**
-- `"noUncheckedIndexedAccess": true` — 防止数组越界
-- `"noImplicitOverride": true` — 强制 override 关键字
-
----
-
-## 3. PowerShell 脚本安全与健壮性
-
-### 3.1 安全风险等级
-
-| 风险 | 等级 | 紧急程度 |
-|------|------|----------|
-| `LoadWithPartialName` 弃用 | 中 | 近期 |
-| 手动 JSON 转义缺失控制字符 | **高** | **立即** |
-| PS1 崩溃时 Node 侧误导性 "gone" 事件 | 中 | 中 |
-| `keybd_event` 键状态不同步 | **高** | **立即** |
-| 无进程健康监控 | 中 | 短期 |
-| stdin 轮询中 `.Result` 潜在死锁 | 低 | 低 |
-
-### 3.2 关键修复
-
-#### 3.2.1 替换弃用的 UIA 程序集加载
-
-```powershell
-# 当前（弃用）
-[System.Reflection.Assembly]::LoadWithPartialName('UIAutomationClient')
-
-# 修复
-Add-Type -AssemblyName 'UIAutomationClient'
-Add-Type -AssemblyName 'UIAutomationTypes'
-```
-
-#### 3.2.2 使用 ConvertTo-Json 替代手动转义
-
-```powershell
-# 当前（脆弱）
-$escapedLines = $lines | ForEach-Object {
-    '"' + ($_ -replace '\\', '\\\\' -replace '"', '\"' ...) + '"'
+Add coverage threshold to `vitest.config.ts`:
+```typescript
+coverage: {
+  provider: 'v8',
+  thresholds: { lines: 80, branches: 70 }
 }
-
-# 修复
-$jsonObject = @{ type = "text"; lines = @($lines) }
-Send-Json ($jsonObject | ConvertTo-Json -Compress)
-```
-
-`ConvertTo-Json` 正确处理所有控制字符、Unicode 代理对、嵌套引号。
-
-#### 3.2.3 修复 keybd_event → SendInput
-
-```powershell
-# 或更好的方案：绕过键盘模拟直接启动 Live Captions
-$lcPaths = @(
-    "$env:LOCALAPPDATA\Microsoft\WindowsApps\LiveCaptions.exe",
-    "$env:ProgramFiles\WindowsApps\*LiveCaptions*\LiveCaptions.exe"
-)
-```
-
-#### 3.2.4 添加参数验证
-
-```powershell
-if ($interval -lt 100) { $interval = 100 }
-if ($title.Length -gt 256) { $title = $title.Substring(0, 256) }
-```
-
-#### 3.2.5 添加 PS1 错误 trap
-
-```powershell
-trap {
-    $errObj = @{ type = "fatal"; message = $_.Exception.Message; ... }
-    [Console]::Error.WriteLine($errObj | ConvertTo-Json -Compress)
-    exit 1
-}
-```
-
-### 3.3 PS1 拆分提议
-
-```
-src/scripts/
-├── uia-common.psm1    ← 共享模块（Export-ModuleMember）
-├── watch-window.ps1   ← 仅 Invoke-Watch
-└── read-captions.ps1  ← 仅 Invoke-Capture
 ```
 
 ---
 
-## 4. 开发体验与配置系统
+## Phase 6: CI/CD Fixes (P1)
 
-### 4.1 配置系统重构
+### 6.1 Fix powershell-check
 
-**当前问题：** 仅 3 个 CLI 参数、无配置文件、无环境变量、无校验、无 help/version。
+```yaml
+# Before: hardcoded 2 scripts
+$scripts = @('src/scripts/uia-capture.ps1', 'launcher.ps1')
 
-**目标：** 4 层配置优先级
-
-```
-CLI 参数（最高）
-   ↓ 覆盖
-配置文件（--config 或自动发现 .live-captions.json）
-   ↓ 覆盖
-环境变量（LIVE_CAPTIONS_VAULT, LIVE_CAPTIONS_DIR 等）
-   ↓ 覆盖
-默认值（defaultConfig）
+# After: glob all project PS1/PSM1 files
+$scripts = Get-ChildItem -Recurse -Include *.ps1,*.psm1 -Path src/scripts,*.ps1
 ```
 
-### 4.2 CLI 改进
+### 6.2 Fix lint no-console
 
-- 新增 `--help`/`-h`、`--version`、`--verbose`/`-v`、`--config`/`-c`、`--log-file`、`--no-color`
-- 所有参数值缺失时报错退出
-- 未知参数显示警告
-- 参数值校验（路径存在性、间隔最小值）
+Add to `eslint.config.js`:
+```javascript
+{
+  files: ["src/index.ts", "src/cli.ts", "src/logger.ts"],
+  rules: { "no-console": "off" }
+}
+```
 
-### 4.3 结构化日志
+### 6.3 Add `engines` field to package.json
 
-创建 `src/logger.ts`：
+```json
+{ "engines": { "node": ">=18" } }
+```
 
-| 级别 | 用途 | 默认显示 |
-|------|------|----------|
-| `error` | 不可恢复错误 | 是 |
-| `warn` | 非致命问题 | 是 |
-| `info` | 正常操作信息 | 是 |
-| `debug` | 详细信息（仅 `--verbose`） | 否 |
+### 6.4 Re-evaluate build job
 
-替换全项目 `console.log`，日志格式：`[timestamp] [tag] message`
+Option A: Drop the `build` job (app only runs via `tsx`, `dist/` is never consumed).
+Option B: Add `bin`, `files`, and a copy-assets step to make `dist/` actually runnable.
 
-### 4.4 npm scripts
+**Recommendation:** Option A for now. Add build back when publishing to npm.
+
+---
+
+## Phase 7: Cleanup (P2)
+
+### 7.1 Launcher scripts
+
+| File | Action |
+|------|--------|
+| `launcher.ps1` | **Keep** — primary entry point, checked in CI |
+| `start-hidden.vbs` | **Keep** — internal helper used by launcher.ps1 |
+| `launcher.bat` | **Delete** — duplicate of launcher.ps1 functionality |
+| `start.bat` | **Delete** — 3-line wrapper, redundant with `npm start` |
+
+### 7.2 Update README
+
+- Add `cli.ts`, `config-loader.ts`, `logger.ts` to Project Structure
+- Document `.live-captions.json` config file support
+- Document `LIVE_CAPTIONS_*` environment variables
+- Document all CLI flags (`--verbose`, `--log-file`, `--no-color`, `--config`, `--watch`, `--capture`)
+- Fix sample output to match actual Chinese log messages
+- Document `launcher.ps1` as the one-click entry point
+
+### 7.3 Update package.json
 
 ```json
 {
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "start": "tsx src/index.ts",
-    "build": "tsc",
-    "lint": "eslint src/",
-    "format": "prettier --write \"src/**/*.ts\"",
-    "test": "vitest run",
-    "test:coverage": "vitest run --coverage",
-    "typecheck": "tsc --noEmit",
-    "audit": "npm audit --audit-level=high"
+    "launcher": "powershell -ExecutionPolicy Bypass -File launcher.ps1"
   }
 }
 ```
 
-### 4.5 启动脚本合并
-
-当前 4 个启动脚本（`launcher.ps1`、`launcher.bat`、`start.bat`、`start-hidden.vbs`）功能重叠。建议：
-
-- 保留 `start.bat` — 前台运行（调试用）
-- 合并 `launcher.bat` — 后台启动 + 打开实时字幕（日常使用）
-- 删除 `start-hidden.vbs`
-
-### 4.6 首次运行体验
-
-`src/setup-wizard.ts` — 交互式配置初始化向导：
-
-1. 询问 vault 路径
-2. 询问字幕目录名
-3. 询问窗口标题
-4. 写入 `.live-captions.json`
-5. 可选：添加开机自启动
+Remove dead `lint-staged` config (no pre-commit hook configured).
 
 ---
 
-## 5. CI/CD 与 GitHub 集成
+## Execution Order
 
-### 5.1 当前 CI 问题
-
-- `lint` job 和 `build` job 做同样的事（tsc --noEmit），完全冗余
-- 没有 ESLint 检查
-- 没有测试步骤
-- 没有构建产物
-- 没有安全审计
-- PowerShell 检查只覆盖了一个文件（缺少 `launcher.ps1`）
-
-### 5.2 重写 CI 工作流
-
-```yaml
-jobs:
-  lint:           # ESLint 检查
-  typecheck:      # Node 18/20/22 矩阵
-  powershell-check: # 检查所有 .ps1 文件
-  test:           # vitest run
-  build:          # tsc → upload dist/ artifacts
-  audit:          # npm audit (continue-on-error)
+```
+Phase 1 (wire modules) ──→ Phase 2 (decompose index.ts) ──→ Phase 3 (config + logger)
+         │                                                          │
+         ▼                                                          ▼
+Phase 5 (tests) ←────────────────────────────────────── Phase 4 (async writer)
+         │
+         ▼
+Phase 6 (CI fixes) ──→ Phase 7 (cleanup + README)
 ```
 
-### 5.3 发布工作流
-
-```yaml
-# 触发条件: push tag v*
-release.yml:
-  - tsc 编译
-  - 生成 changelog (git log)
-  - gh release create (dist + scripts)
-```
-
-### 5.4 贡献基础设施
-
-| 文件 | 用途 |
-|------|------|
-| `.github/ISSUE_TEMPLATE/bug_report.md` | Bug 报告模板 |
-| `.github/ISSUE_TEMPLATE/feature_request.md` | 功能请求模板 |
-| `.github/PULL_REQUEST_TEMPLATE.md` | PR 描述模板 |
-| `.github/CONTRIBUTING.md` | 贡献指南 |
-| `.github/CODEOWNERS` | 代码审查分配 |
-| `.github/dependabot.yml` | 自动依赖更新（npm + actions） |
-
-### 5.5 gh CLI 集成
-
-```bash
-# PR 管理
-gh pr status
-gh pr list --review-requested "@me"
-gh pr checks <pr-number>
-gh pr create --title "feat: ..." --body "Closes #123"
-gh pr merge <pr-number> --squash --delete-branch
-
-# Release 管理
-gh release create v1.0.0 --title "v1.0.0" --notes "..." dist/*
-```
+Phases 1-3 are tightly coupled and should be done as one PR.
+Phases 4-5 can be a second PR.
+Phases 6-7 can be a third PR.
 
 ---
 
-## 6. 优先级路线图
-
-### Phase 1（P0 — 立即执行）
-
-| # | 事项 | 类型 | 工作量 |
-|---|------|------|--------|
-| 1 | 修复空 catch 块 | 错误处理 | 5min |
-| 2 | PS1 手动 JSON 转义 → ConvertTo-Json | 安全 | 10min |
-| 3 | 修复 keybd_event → 直接启动 Live Captions | 安全 | 15min |
-| 4 | 安装 vitest + extractNewLines 单元测试 | 测试 | 30min |
-| 5 | 添加 uncaughtException/unhandledRejection | 健壮性 | 10min |
-| 6 | CLI 参数校验（缺值报错、--help） | DX | 15min |
-| 7 | npm scripts + tsconfig 增强 | DX | 10min |
-
-### Phase 2（P1 — 下一个迭代）
-
-| # | 事项 | 类型 | 工作量 |
-|---|------|------|--------|
-| 8 | PS1 拆分为 uia-common.psm1 + watch/capture | 架构 | 30min |
-| 9 | 抽取 PsProcess 类 | 架构 | 45min |
-| 10 | 创建结构化 Logger | DX | 30min |
-| 11 | 配置文件支持（JSON + 环境变量） | DX | 30min |
-| 12 | 添加 ESLint + Prettier | 工具链 | 20min |
-| 13 | 启动脚本合并清理 | DX | 10min |
-| 14 | 重写 CI（解耦 job + audit） | CI/CD | 20min |
-
-### Phase 3（P2 — 中期）
-
-| # | 事项 | 类型 | 工作量 |
-|---|------|------|--------|
-| 15 | TypedEventEmitter 类型安全事件 | 架构 | 20min |
-| 16 | 服务接口 + CaptureOrchestrator | 架构 | 60min |
-| 17 | Config 按接口隔离 | 架构 | 15min |
-| 18 | writer 异步 I/O | 性能 | 15min |
-| 19 | PS1 进程健康监控 + 心跳 | 健壮性 | 30min |
-| 20 | 添加 Issue/PR 模板 + CONTRIBUTING.md | 社区 | 20min |
-| 21 | release.yml 发布工作流 | CI/CD | 15min |
-| 22 | 配置 Dependabot | CI/CD | 5min |
-
-### Phase 4（P3 — 长期）
-
-| # | 事项 | 类型 | 工作量 |
-|---|------|------|--------|
-| 23 | 首次运行设置向导 | DX | 30min |
-| 24 | Windows 开机自启动 | DX | 20min |
-| 25 | npm 发布配置 | 分发 | 15min |
-| 26 | 集成测试 + E2E 测试 | 测试 | 60min |
-
----
-
-## 附录：项目结构演变
-
-### 当前
+## Target Architecture
 
 ```
 src/
-├── index.ts
-├── config.ts
-├── monitor.ts
-├── capture.ts
-├── writer.ts
-└── scripts/
-    └── uia-capture.ps1
-```
-
-### 重构后
-
-```
-src/
-├── index.ts                    # 精简：CLI → 工厂 → orchestrate
-├── cli.ts                      # [新] CLI 参数解析、help
-├── config.ts                   # Config 接口 + 子接口
-├── config-loader.ts            # [新] 多源配置合并
-├── logger.ts                   # [新] 结构化日志
-├── orchestrator.ts             # [新] 编排层
-├── interfaces.ts               # [新] 服务接口
-├── monitor.ts                  # 简化：依赖 PsProcess
-├── capture.ts                  # 简化：依赖 PsProcess + dedup
-├── writer.ts                   # 异步 I/O
-├── setup-wizard.ts             # [新] 初始化向导
+├── index.ts                    # ~20 lines: CLI → config → logger → app.start()
+├── app.ts                      # [NEW] Application class: orchestration, event wiring
+├── lifecycle.ts                # [NEW] SIGINT/SIGTERM/uncaughtException handlers
+├── cli.ts                      # CLI arg parsing, help, version (unchanged)
+├── config.ts                   # Config interface + sub-interfaces
+├── config-loader.ts            # 4-layer config resolution (ACTIVATED)
+├── logger.ts                   # Structured logger (ACTIVATED)
+├── monitor.ts                  # WindowMonitor: PsProcess + TypedEventEmitter
+├── capture.ts                  # CaptureService: PsProcess + TypedEventEmitter + dedup.ts
+├── writer.ts                   # ObsidianWriter: async I/O
 ├── lib/
-│   ├── ps-process.ts           # [新] PowerShell 进程管理
-│   ├── typed-event-emitter.ts  # [新] 类型安全事件
-│   └── dedup.ts                # [新] 去重纯函数
+│   ├── ps-process.ts           # PowerShell process lifecycle (USED)
+│   ├── typed-event-emitter.ts  # Type-safe events (USED)
+│   └── dedup.ts                # extractNewLines pure function (USED)
 ├── __tests__/
-│   ├── config.test.ts
-│   ├── capture.test.ts
-│   ├── writer.test.ts
-│   └── dedup.test.ts
+│   ├── config.test.ts          # existing
+│   ├── dedup.test.ts           # existing
+│   ├── writer.test.ts          # existing
+│   ├── cli.test.ts             # [NEW]
+│   ├── config-loader.test.ts   # [NEW]
+│   ├── logger.test.ts          # [NEW]
+│   ├── typed-event-emitter.test.ts  # [NEW]
+│   ├── app.test.ts             # [NEW]
+│   └── ps-process.test.ts      # [NEW]
 └── scripts/
-    ├── uia-common.psm1         # [新] 共享 PS1 模块
-    ├── watch-window.ps1        # [新] 仅窗口检测
-    └── read-captions.ps1       # [新] 仅字幕提取
+    ├── uia-common.psm1         # Shared UIA module (USED)
+    ├── watch-window.ps1        # Window detection only (USED)
+    └── read-captions.ps1       # Caption extraction only (USED)
+    # uia-capture.ps1           # DELETED — superseded by split scripts
 ```
+
+---
+
+## Summary of All File Changes
+
+| File | Action | Phase |
+|------|--------|-------|
+| `src/index.ts` | Rewrite: slim to ~20 lines | 2 |
+| `src/app.ts` | **Create**: Application orchestrator | 2 |
+| `src/lifecycle.ts` | **Create**: Signal handlers | 2 |
+| `src/monitor.ts` | Refactor: use PsProcess + TypedEventEmitter + watch-window.ps1 | 1 |
+| `src/capture.ts` | Refactor: use PsProcess + TypedEventEmitter + dedup.ts + read-captions.ps1 | 1 |
+| `src/writer.ts` | Refactor: async I/O | 4 |
+| `src/config.ts` | Update: remove OBSIDIAN_VAULT_PATH | 3 |
+| `src/config-loader.ts` | No changes (already correct) | — |
+| `src/logger.ts` | No changes (already correct) | — |
+| `src/cli.ts` | No changes | — |
+| `src/lib/ps-process.ts` | Minor: add goneEmitted support if needed | 1 |
+| `src/lib/typed-event-emitter.ts` | No changes | — |
+| `src/lib/dedup.ts` | Update: merge overlap-dedup branch from capture.ts | 1 |
+| `src/scripts/uia-capture.ps1` | **Delete** | 1 |
+| `launcher.bat` | **Delete** | 7 |
+| `start.bat` | **Delete** | 7 |
+| `.github/workflows/ci.yml` | Update: glob PS1 files, fix lint | 6 |
+| `eslint.config.js` | Update: no-console override for CLI files | 6 |
+| `package.json` | Update: engines, remove lint-staged, add coverage dep | 6 |
+| `vitest.config.ts` | Update: add coverage thresholds | 5 |
+| `README.md` | Rewrite: accurate project structure, config docs, launcher docs | 7 |
+| `src/__tests__/cli.test.ts` | **Create** | 5 |
+| `src/__tests__/config-loader.test.ts` | **Create** | 5 |
+| `src/__tests__/logger.test.ts` | **Create** | 5 |
+| `src/__tests__/typed-event-emitter.test.ts` | **Create** | 5 |
+| `src/__tests__/app.test.ts` | **Create** | 5 |
+| `src/__tests__/ps-process.test.ts` | **Create** | 5 |

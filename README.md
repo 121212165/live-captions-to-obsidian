@@ -23,6 +23,7 @@ Automatically capture text from the Windows 11 Live Captions window and save it 
 - **UI Automation / 界面自动化** -- extracts text directly from the Live Captions window via Windows UI Automation (PowerShell)
 - **Deduplication / 去重** -- tracks already-seen lines so only new text is written to disk
 - **Daily notes / 每日笔记** -- each day gets its own file `字幕-YYYY-MM-DD.md`; multiple sessions within one day are separated by a `---` divider
+- **Layered configuration / 分层配置** -- supports CLI arguments, config file (`.live-captions.json`), environment variables, and defaults
 - **Zero runtime dependencies / 零运行时依赖** -- the only dependency is `tsx` for development; everything else uses Node.js built-ins and PowerShell
 
 ---
@@ -53,6 +54,13 @@ npx tsx src/index.ts
 
 The tool will wait for the Live Captions window to appear. Press `Win+Ctrl+L` to open it and capture begins automatically.
 
+### One-click launcher
+
+```powershell
+# Starts the capture tool + opens Live Captions in one action
+powershell -ExecutionPolicy Bypass -File launcher.ps1
+```
+
 ---
 
 ## Usage
@@ -66,33 +74,72 @@ The tool will wait for the Live Captions window to appear. Press `Win+Ctrl+L` to
 4. Close the Live Captions window or press `Ctrl+C` in the terminal to stop.
 
 ```
-[monitor] Waiting for Live Captions window...
-[monitor] Live Captions window detected
-[capture] Session started
-[capture] 3 new lines captured
-[capture] 5 new lines captured
-[monitor] Live Captions window closed
-[capture] Session ended -- 8 lines written to 字幕-2026-05-26.md
+[启动] Live Captions → Obsidian 自动捕获工具
+  Vault: C:\Users\you\Documents\Obsidian
+  目录: notes
+  窗口: "实时字幕"
+[监控中] 等待实时字幕窗口 (Win+Ctrl+L)...
+
+[检测到] 实时字幕窗口出现
+[捕获中] 正在记录字幕...
+  文件: C:\Users\you\Documents\Obsidian\notes\字幕-2026-05-27.md
+  +3 条 (共 8 条)
+[监控中] 字幕窗口已关闭，共保存 8 条
+[监控中] 继续等待实时字幕窗口...
 ```
 
 ---
 
 ## Configuration
 
-The vault path defaults to `$HOME\Documents\Obsidian` and can be overridden with the `OBSIDIAN_VAULT_PATH` environment variable or the `--vault` CLI argument.
+All settings can be overridden via multiple sources (highest priority first):
 
-All settings can be overridden via CLI arguments:
+### Priority: CLI > Config file > Environment variables > Defaults
+
+### CLI Arguments
 
 | Argument | Default | Description |
 |----------|---------|-------------|
-| `--vault PATH` | `$HOME\Documents\Obsidian` (or `OBSIDIAN_VAULT_PATH` env var) | Path to your Obsidian vault |
+| `--vault PATH` | `$HOME\Documents\Obsidian` | Path to your Obsidian vault |
 | `--dir NAME` | `notes` | Subdirectory inside the vault for caption notes |
 | `--title TITLE` | `实时字幕` | Window title to look for (match your Live Captions language setting) |
+| `--watch MS` | `2000` | Window detection polling interval (ms) |
+| `--capture MS` | `500` | Caption text extraction polling interval (ms) |
+| `--config PATH` | auto-discovered | Path to config file |
+| `--verbose, -v` | off | Enable debug logging |
+| `--log-file PATH` | none | Write logs to file |
+| `--no-color` | off | Disable colored output |
+| `--help, -h` | | Show help |
+| `--version` | | Show version |
 
-Example:
+### Config File
+
+Create `.live-captions.json` in your project directory or home directory:
+
+```json
+{
+  "vaultPath": "D:\\MyVault",
+  "notesDir": "captions",
+  "windowTitle": "Live Captions",
+  "watchInterval": 3000,
+  "captureInterval": 1000
+}
+```
+
+### Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `LIVE_CAPTIONS_VAULT` | Override vault path |
+| `LIVE_CAPTIONS_DIR` | Override notes directory |
+| `LIVE_CAPTIONS_TITLE` | Override window title |
+| `LIVE_CAPTIONS_WATCH_INTERVAL` | Override watch interval |
+| `LIVE_CAPTIONS_CAPTURE_INTERVAL` | Override capture interval |
+
+### Example
 
 ```bash
-npx tsx src/index.ts --vault "D:\MyVault" --dir "captions" --title "Live Captions"
+npx tsx src/index.ts --vault "D:\MyVault" --dir "captions" --title "Live Captions" --verbose
 ```
 
 > **Note:** If your Windows display language is English, use `--title "Live Captions"` instead of the default Chinese title.
@@ -104,7 +151,7 @@ npx tsx src/index.ts --vault "D:\MyVault" --dir "captions" --title "Live Caption
 Each day produces a single Markdown file in your vault. The file name follows the pattern `字幕-YYYY-MM-DD.md`:
 
 ```markdown
-# 字幕笔记 - 2026年5月26日
+# 字幕笔记 - 2026年5月27日
 
 > 14:30:15 开始捕获
 
@@ -127,39 +174,30 @@ Lines are prefixed with a timestamp. Multiple capture sessions on the same day a
 ## Architecture
 
 ```
-                   Win+Ctrl+L
+              index.ts (CLI → config → bootstrap)
                        |
                        v
-              +-----------------+
-              |  Windows 11     |
-              |  Live Captions  |
               +--------+--------+
-                       |
-          UI Automation (PowerShell)
-                       |
-              +--------v--------+
-              |   monitor.ts    |  window detection (appear / gone events)
+              |    app.ts       |  orchestrator: event wiring, lifecycle
               +--------+--------+
-                       |
-              +--------v--------+
-              |   capture.ts    |  text extraction, JSON parsing, dedup
-              +--------+--------+
-                       |
-              +--------v--------+
-              |    writer.ts    |  Markdown formatting, file I/O
-              +--------+--------+
-                       |
-                       v
-              +-----------------+
-              |   Obsidian Vault|
-              | 字幕-YYYY-MM.md  |
-              +-----------------+
+                  |         |
+                  v         v
+          monitor.ts    capture.ts ──→ writer.ts
+              |              |              |
+              v              v              v
+         watch-window.ps1  read-captions.ps1  Obsidian Vault
+              \              |              /
+               \   uia-common.psm1        /
+                \     (shared)           /
+                 \        |            /
+                  Windows 11 Live Captions
+```
 ```
 
 **Data flow:**
 
-1. `monitor.ts` polls for the Live Captions window via PowerShell at a configurable interval.
-2. When the window appears, `capture.ts` invokes `uia-capture.ps1` in watch mode to stream caption text as JSON lines.
+1. `monitor.ts` polls for the Live Captions window via PowerShell (`watch-window.ps1`) at a configurable interval.
+2. When the window appears, `capture.ts` invokes `read-captions.ps1` to stream caption text as JSON lines.
 3. Each new line is checked against a seen-lines set; only unseen text is forwarded.
 4. `writer.ts` appends timestamped lines to the daily Markdown file in the configured Obsidian vault path.
 
@@ -169,13 +207,50 @@ Lines are prefixed with a timestamp. Multiple capture sessions on the same day a
 
 ```
 src/
-├── index.ts               # Entry point: CLI arg parsing, status display, graceful shutdown
+├── index.ts               # Entry point: CLI parsing, config resolution, bootstrap
+├── app.ts                 # Application orchestrator: event wiring, lifecycle management
+├── lifecycle.ts           # Signal handlers (SIGINT/SIGTERM/uncaughtException)
+├── cli.ts                 # CLI argument parsing, help text, validation
+├── config.ts              # Config interface and defaults
+├── config-loader.ts       # Multi-source config resolution (CLI > file > env > defaults)
+├── logger.ts              # Structured logger with levels, timestamps, file output
 ├── monitor.ts             # Window detection via PowerShell; emits appear/gone events
 ├── capture.ts             # PowerShell communication, JSON parsing, deduplication
-├── writer.ts              # Obsidian file writing (date-based filenames, timestamps)
-├── config.ts              # Config types and defaults
+├── writer.ts              # Obsidian file writing (date-based filenames, async I/O)
+├── lib/
+│   ├── ps-process.ts      # PowerShell subprocess lifecycle management
+│   ├── typed-event-emitter.ts  # Type-safe event emitter
+│   └── dedup.ts           # Text deduplication pure function
+├── __tests__/
+│   ├── app.test.ts
+│   ├── cli.test.ts
+│   ├── config.test.ts
+│   ├── config-loader.test.ts
+│   ├── dedup.test.ts
+│   ├── logger.test.ts
+│   ├── ps-process.test.ts
+│   ├── typed-event-emitter.test.ts
+│   └── writer.test.ts
 └── scripts/
-    └── uia-capture.ps1    # PowerShell UIA script (watch / capture dual modes)
+    ├── uia-common.psm1    # Shared PowerShell UIA module
+    ├── watch-window.ps1   # Window existence polling
+    └── read-captions.ps1  # Caption text extraction
+```
+
+---
+
+## Development
+
+```bash
+npm run dev          # Run with auto-reload (tsx watch)
+npm start            # Run once (tsx)
+npm test             # Run tests (vitest)
+npm run test:watch   # Run tests in watch mode
+npm run test:coverage # Run tests with coverage
+npm run lint         # ESLint check
+npm run lint:fix     # ESLint auto-fix
+npm run format       # Prettier format
+npm run typecheck    # TypeScript type check
 ```
 
 ---
@@ -187,8 +262,9 @@ Contributions are welcome. Please open an issue first to discuss what you would 
 1. Fork the repository.
 2. Create a feature branch: `git checkout -b feature/your-change`
 3. Make your changes and test on Windows 11 with Live Captions.
-4. Commit with a clear message and push.
-5. Open a pull request describing your changes.
+4. Run `npm test` and `npm run lint` before committing.
+5. Commit with a clear message and push.
+6. Open a pull request describing your changes.
 
 ---
 
