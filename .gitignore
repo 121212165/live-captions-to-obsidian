@@ -3,3 +3,7 @@ dist/
 *.js.map
 .DS_Store
 Thumbs.db
+
+# User-specific config (layered configuration system)
+.env
+.live-captions.json

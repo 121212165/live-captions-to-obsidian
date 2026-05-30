@@ -34,7 +34,9 @@ export class Application {
 
     this.monitor.on("gone", () => {
       if (this.isCapturing) {
-        console.log(`\n${YELLOW}[监控中]${RESET} 字幕窗口已关闭 (monitor)，共保存 ${this.lineCount} 条`);
+        console.log(
+          `\n${YELLOW}[监控中]${RESET} 字幕窗口已关闭 (monitor)，共保存 ${this.lineCount} 条`,
+        );
         this.cleanupCapture();
         console.log(`${YELLOW}[监控中]${RESET} 继续等待实时字幕窗口...\n`);
       }

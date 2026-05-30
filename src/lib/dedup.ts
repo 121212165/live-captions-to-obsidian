@@ -24,11 +24,7 @@ export function extractNewLines(rawLines: string[], prevText: string): DedupResu
   } else {
     // 文本被重写 — 找最长公共前缀
     let i = 0;
-    while (
-      i < currentText.length &&
-      i < prevText.length &&
-      currentText[i] === prevText[i]
-    ) {
+    while (i < currentText.length && i < prevText.length && currentText[i] === prevText[i]) {
       i++;
     }
     newContent = currentText.substring(i);

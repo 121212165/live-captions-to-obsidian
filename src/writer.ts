@@ -35,7 +35,10 @@ export class ObsidianWriter {
 
   async beginSession(): Promise<void> {
     const now = new Date();
-    const exists = await fs.promises.access(this.filePath).then(() => true).catch(() => false);
+    const exists = await fs.promises
+      .access(this.filePath)
+      .then(() => true)
+      .catch(() => false);
 
     if (!exists && !this.fileCreated) {
       const header = `# 字幕笔记 - ${formatDisplayDate(now)}\n\n`;

@@ -100,11 +100,15 @@ describe("validateConfig", () => {
   });
 
   it("errors on watchInterval too small", () => {
-    expect(validateConfig({ ...defaultConfig, watchInterval: 100 })).toContain("watchInterval 不能小于 200ms");
+    expect(validateConfig({ ...defaultConfig, watchInterval: 100 })).toContain(
+      "watchInterval 不能小于 200ms",
+    );
   });
 
   it("errors on captureInterval too small", () => {
-    expect(validateConfig({ ...defaultConfig, captureInterval: 50 })).toContain("captureInterval 不能小于 100ms");
+    expect(validateConfig({ ...defaultConfig, captureInterval: 50 })).toContain(
+      "captureInterval 不能小于 100ms",
+    );
   });
 
   it("returns multiple errors", () => {

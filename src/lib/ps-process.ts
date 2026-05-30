@@ -19,13 +19,11 @@ export class PsProcess {
   }
 
   start(options: PsProcessOptions): void {
-    this.proc = spawn("powershell", [
-      "-NoProfile",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-File",
-      options.scriptPath,
-    ], { stdio: ["pipe", "pipe", "pipe"] });
+    this.proc = spawn(
+      "powershell",
+      ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", options.scriptPath],
+      { stdio: ["pipe", "pipe", "pipe"] },
+    );
 
     // Drain stderr
     this.proc.stderr?.on("data", (data: Buffer) => {
@@ -72,7 +70,11 @@ export class PsProcess {
       const proc = this.proc;
 
       const forceKillTimer = setTimeout(() => {
-        try { proc.kill("SIGKILL"); } catch { /* process may already be dead */ }
+        try {
+          proc.kill("SIGKILL");
+        } catch {
+          /* process may already be dead */
+        }
         resolve();
       }, CLEANUP_KILL_TIMEOUT_MS + CLEANUP_FORCE_KILL_TIMEOUT_MS);
 
@@ -86,20 +88,32 @@ export class PsProcess {
         proc.stdin?.write(JSON.stringify({ cmd: "exit" }) + "\n");
       } catch {
         clearTimeout(forceKillTimer);
-        try { proc.kill(); } catch { /* process already terminated */ }
+        try {
+          proc.kill();
+        } catch {
+          /* process already terminated */
+        }
         resolve();
       }
 
       // Force kill after timeout
       setTimeout(() => {
-        try { proc.kill("SIGTERM"); } catch { /* process may have exited */ }
+        try {
+          proc.kill("SIGTERM");
+        } catch {
+          /* process may have exited */
+        }
       }, CLEANUP_KILL_TIMEOUT_MS);
     });
   }
 
   kill(): void {
     if (this.proc) {
-      try { this.proc.kill(); } catch { /* already dead */ }
+      try {
+        this.proc.kill();
+      } catch {
+        /* already dead */
+      }
       this.proc = null;
     }
   }

@@ -79,7 +79,9 @@ describe("TypedEventEmitter", () => {
   it("catches errors in listeners without crashing", () => {
     const emitter = new TypedEventEmitter<TestEvents>();
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    emitter.on("hello", () => { throw new Error("boom"); });
+    emitter.on("hello", () => {
+      throw new Error("boom");
+    });
     expect(() => emitter.emit("hello", "test")).not.toThrow();
     expect(spy).toHaveBeenCalled();
     spy.mockRestore();

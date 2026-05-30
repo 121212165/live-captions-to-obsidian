@@ -1,0 +1,5 @@
+# Ensure consistent line endings across platforms
+* text=auto eol=lf
+*.ps1 text eol=crlf
+*.psm1 text eol=crlf
+*.bat text eol=crlf
