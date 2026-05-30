@@ -22,6 +22,17 @@ jobs:
       - run: npm ci
       - run: npx eslint src/
 
+  format:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npx prettier --check "src/**/*.ts"
+
   typecheck:
     runs-on: windows-latest
     strategy:
@@ -70,11 +81,18 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
-      - run: npx vitest run --reporter=verbose
+      - run: npx vitest run --reporter=verbose --coverage
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage/
+          retention-days: 7
 
   build:
     runs-on: windows-latest
-    needs: [lint, typecheck, test, powershell-check]
+    needs: [lint, format, typecheck, test, powershell-check]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
