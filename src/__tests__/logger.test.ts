@@ -1,5 +1,8 @@
-import { describe, it, expect, vi } from "vitest";
-import { Logger } from "../logger.js";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { mkdtempSync, rmSync, readFileSync } from "fs";
+import { join } from "path";
+import { tmpdir } from "os";
+import { Logger, getLogger } from "../logger.js";
 
 describe("Logger", () => {
   it("logs info messages", () => {
@@ -55,5 +58,79 @@ describe("Logger", () => {
     const output = spy.mock.calls[0]?.[0] as string;
     expect(output).toMatch(/\d{4}-\d{2}-\d{2}T/); // ISO timestamp
     spy.mockRestore();
+  });
+
+  it("writes to log file when logFile is set", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "logger-test-"));
+    const logPath = join(tmp, "test.log");
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const logger = new Logger({ level: "info", verbose: false, noColor: true, logFile: logPath });
+    logger.info("tag", "file-logged message");
+    logger.destroy();
+    // Wait a tick for stream to flush
+    await new Promise((r) => setTimeout(r, 50));
+    const content = readFileSync(logPath, "utf-8");
+    expect(content).toContain("file-logged message");
+    expect(content).toContain("[INFO]");
+    expect(content).toContain("[tag]");
+    spy.mockRestore();
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it("destroy closes the log file stream", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "logger-dest-"));
+    const logPath = join(tmp, "destroy.log");
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const logger = new Logger({ level: "info", verbose: false, noColor: true, logFile: logPath });
+    logger.info("tag", "before destroy");
+    // Wait for stream to be ready before destroying
+    await new Promise((r) => setTimeout(r, 50));
+    logger.destroy();
+    // Calling destroy again should not throw
+    logger.destroy();
+    spy.mockRestore();
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it("outputs color codes when noColor is false", () => {
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const logger = new Logger({ level: "info", verbose: false, noColor: false });
+    logger.info("test", "colored");
+    const output = spy.mock.calls[0]?.[0] as string;
+    expect(output).toContain("\x1b[");
+    spy.mockRestore();
+  });
+
+  it("passes extra args to console.log", () => {
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const logger = new Logger({ level: "info", verbose: false, noColor: true });
+    logger.info("test", "msg", { extra: 1 });
+    expect(spy).toHaveBeenCalledOnce();
+    expect(spy.mock.calls[0]?.length).toBeGreaterThan(1);
+    spy.mockRestore();
+  });
+});
+
+describe("getLogger", () => {
+  afterEach(() => {
+    // Reset the default logger singleton by creating a new one
+    getLogger({ level: "info", verbose: false, noColor: false });
+  });
+
+  it("returns a Logger instance", () => {
+    const logger = getLogger();
+    expect(logger).toBeInstanceOf(Logger);
+  });
+
+  it("returns the same instance on subsequent calls without options", () => {
+    const logger1 = getLogger({ level: "warn", verbose: false, noColor: true });
+    const logger2 = getLogger();
+    expect(logger2).toBe(logger1);
+  });
+
+  it("creates a new instance when options are provided", () => {
+    const logger1 = getLogger({ level: "info", verbose: false, noColor: true });
+    const logger2 = getLogger({ level: "debug", verbose: true, noColor: false });
+    expect(logger2).not.toBe(logger1);
   });
 });
