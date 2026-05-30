@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync, existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
@@ -108,5 +108,35 @@ describe("ObsidianWriter", () => {
     expect(filePath).toContain(tmpDir);
     expect(filePath).toContain(defaultConfig.notesDir);
     expect(filePath).toMatch(/字幕-\d{4}-\d{2}-\d{2}\.md$/);
+  });
+
+  it("writeLines 日期变更时切换到新文件并创建新会话", async () => {
+    const writer = createWriter();
+    await writer.beginSession();
+    const originalPath = writer.getFilePath();
+    await writer.writeLines(["第一天的内容"]);
+
+    // Simulate date change by advancing the clock to the next day
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    vi.setSystemTime(tomorrow);
+
+    await writer.writeLines(["第二天的内容"]);
+
+    const newPath = writer.getFilePath();
+    expect(newPath).not.toBe(originalPath);
+    expect(existsSync(newPath)).toBe(true);
+    const newContent = readFileSync(newPath, "utf-8");
+    expect(newContent).toContain("# 字幕笔记 -");
+    expect(newContent).toContain("第二天的内容");
+
+    vi.useRealTimers();
+  });
+
+  it("自定义 notesDir 创建对应子目录", () => {
+    const writer = createWriter({ notesDir: "custom-notes" });
+    const dirPath = join(tmpDir, "custom-notes");
+    expect(existsSync(dirPath)).toBe(true);
+    expect(writer.getFilePath()).toContain("custom-notes");
   });
 });
