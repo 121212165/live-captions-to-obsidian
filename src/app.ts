@@ -29,7 +29,7 @@ export class Application {
 
     this.monitor.on("appear", () => {
       console.log(`${GREEN}[检测到]${RESET} 实时字幕窗口出现`);
-      this.startCapture();
+      void this.startCapture();
     });
 
     this.monitor.on("gone", () => {
@@ -52,7 +52,7 @@ export class Application {
     await this.monitor.stop();
   }
 
-  private startCapture(): void {
+  private async startCapture(): Promise<void> {
     if (this.isCapturing) {
       console.log(`${DIM}  [跳过] 已在捕获中${RESET}`);
       return;
@@ -62,14 +62,14 @@ export class Application {
 
     console.log(`${GREEN}[捕获中]${RESET} 正在记录字幕...`);
     this.writer = new ObsidianWriter(this.config);
-    this.writer.beginSession();
+    await this.writer.beginSession();
     console.log(`${DIM}  文件: ${this.writer.getFilePath()}${RESET}`);
 
     this.capture = new CaptureService(this.config);
 
-    this.capture.on("text", (lines: string[]) => {
+    this.capture.on("text", async (lines: string[]) => {
       this.lineCount += lines.length;
-      this.writer?.writeLines(lines);
+      await this.writer?.writeLines(lines);
       process.stdout.write(`${CYAN}  +${lines.length}${RESET} 条 (共 ${this.lineCount} 条)\r`);
     });
 
