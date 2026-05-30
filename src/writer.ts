@@ -27,7 +27,15 @@ export class ObsidianWriter {
   private notesDir: string;
 
   constructor(config: Config) {
-    this.notesDir = path.join(config.vaultPath, config.notesDir);
+    const vaultRoot = path.resolve(config.vaultPath);
+    this.notesDir = path.resolve(vaultRoot, config.notesDir);
+
+    if (!this.notesDir.startsWith(vaultRoot + path.sep) && this.notesDir !== vaultRoot) {
+      throw new Error(
+        `notesDir resolves outside the vault: ${this.notesDir} is not inside ${vaultRoot}`,
+      );
+    }
+
     fs.mkdirSync(this.notesDir, { recursive: true });
     this.currentDate = formatDate(new Date());
     this.filePath = path.join(this.notesDir, `字幕-${this.currentDate}.md`);

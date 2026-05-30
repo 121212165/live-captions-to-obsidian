@@ -25,7 +25,9 @@ export function registerLifecycle(app: AppLike): void {
     process.exit(1);
   });
 
-  process.on("unhandledRejection", (reason) => {
+  process.on("unhandledRejection", async (reason) => {
     console.error(`${RED}[致命错误]${RESET} 未处理的 Promise 拒绝: ${reason}`);
+    await app.stop();
+    process.exit(1);
   });
 }

@@ -38,12 +38,52 @@ function discoverConfigFile(cwd: string): string | null {
 }
 
 /**
+ * Runtime type-check for parsed config values.
+ */
+function validateConfigFile(data: unknown): ConfigFile | null {
+  if (typeof data !== "object" || data === null || Array.isArray(data)) return null;
+
+  const obj = data as Record<string, unknown>;
+  const result: ConfigFile = {};
+
+  if ("vaultPath" in obj) {
+    if (typeof obj.vaultPath !== "string") return null;
+    result.vaultPath = obj.vaultPath;
+  }
+  if ("notesDir" in obj) {
+    if (typeof obj.notesDir !== "string") return null;
+    result.notesDir = obj.notesDir;
+  }
+  if ("windowTitle" in obj) {
+    if (typeof obj.windowTitle !== "string") return null;
+    result.windowTitle = obj.windowTitle;
+  }
+  if ("watchInterval" in obj) {
+    if (typeof obj.watchInterval !== "number" || !Number.isFinite(obj.watchInterval)) return null;
+    result.watchInterval = obj.watchInterval;
+  }
+  if ("captureInterval" in obj) {
+    if (typeof obj.captureInterval !== "number" || !Number.isFinite(obj.captureInterval))
+      return null;
+    result.captureInterval = obj.captureInterval;
+  }
+
+  return result;
+}
+
+/**
  * 从文件加载配置
  */
 function loadConfigFile(path: string): ConfigFile | null {
   try {
     const raw = readFileSync(path, "utf-8");
-    return JSON.parse(raw) as ConfigFile;
+    const parsed: unknown = JSON.parse(raw);
+    const validated = validateConfigFile(parsed);
+    if (!validated) {
+      console.warn(`[警告] 配置文件格式无效: ${path}`);
+      return null;
+    }
+    return validated;
   } catch (e) {
     console.warn(`[警告] 无法读取配置文件 ${path}: ${(e as Error).message}`);
     return null;
