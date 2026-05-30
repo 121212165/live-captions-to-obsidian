@@ -4,10 +4,7 @@ import { extractNewLines } from "../lib/dedup.js";
 describe("extractNewLines", () => {
   it("正常追加：上次文本是当前文本前缀时返回新增行", () => {
     const first = extractNewLines(["第一行", "第二行"], "");
-    const second = extractNewLines(
-      ["第一行", "第二行", "第三行"],
-      first.currentText,
-    );
+    const second = extractNewLines(["第一行", "第二行", "第三行"], first.currentText);
     expect(second.newLines).toEqual(["第三行"]);
   });
 
@@ -49,10 +46,7 @@ describe("extractNewLines", () => {
 
   it("空行被过滤", () => {
     const first = extractNewLines(["第一行"], "");
-    const second = extractNewLines(
-      ["第一行", "", "  ", "第二行"],
-      first.currentText,
-    );
+    const second = extractNewLines(["第一行", "", "  ", "第二行"], first.currentText);
     expect(second.newLines).toEqual(["第二行"]);
   });
 
