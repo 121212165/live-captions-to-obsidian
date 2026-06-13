@@ -4,28 +4,29 @@
 
 ## Core Problem
 
-Users want to capture Windows 11 Live Captions text and save it as timestamped notes in Obsidian.
+Capture Windows 11 Live Captions text and save as timestamped notes in Obsidian.
 
 ## First Principles Breakdown
 
-1. Captions are already text on screen. The problem is extraction.
-2. Obsidian notes are just Markdown files. Writing to a folder = writing a file.
-3. Automation should be invisible. Background process, no UI needed.
+1. Captions are already text on screen — extraction, not generation
+2. Obsidian notes are just Markdown files in a folder
+3. User cares about: captured text, timestamp, file location
+4. Localhost needs no security
+5. Background process, no UI needed for core function
 
 ## Essential Features
 
-| Priority | Feature |
-|----------|---------|
-| P0 | Capture Live Captions text |
+| P0 | Capture Live Captions text (Accessibility API or OCR) |
 | P0 | Save as timestamped Markdown to Obsidian vault |
-| P0 | Session isolation |
+| P0 | Session isolation (new file per session/day) |
 | P1 | Hotkey start/stop |
 | P1 | Status indicator |
+| P2 | WebVTT/SRT export |
 
 ## Reconstruction Blueprint
 
-Day 1: Single script (~200 lines). 4 files total.
+Day 1: Single script ~200 lines. 4 files total. Delete Hono, delete monorepo, delete adapters, delete ASR pipeline.
 
-## Musk\'s Razor
+## Musk's Razor
 
-Delete Hono. Delete pnpm monorepo. Delete 16 adapter files. Delete ASR pipeline. Delete localhost security. Ship 87% less code.
+Delete 87% of code (~4,000 lines → ~500). Ship same user value.
