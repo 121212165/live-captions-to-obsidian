@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  typecheck:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npx tsc --noEmit
+
+  powershell-check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check all PowerShell scripts syntax
+        shell: pwsh
+        run: |
+          $scripts = @(
+            'src/scripts/watch-window.ps1',
+            'src/scripts/read-captions.ps1',
+            'src/scripts/uia-common.psm1',
+            'launcher.ps1'
+          )
+          $hasError = $false
+          foreach ($script in $scripts) {
+            if (-not (Test-Path $script)) {
+              Write-Warning "SKIP: $script (not found)"
+              continue
+            }
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($script, [ref]$null, [ref]$errors)
+            if ($errors.Count -gt 0) {
+              $hasError = $true
+              $errors | ForEach-Object { Write-Error "$script : $_" }
+            } else {
+              Write-Host "OK: $script"
+            }
+          }
+          if ($hasError) { exit 1 }
+
+  build:
+    runs-on: windows-latest
+    needs: [typecheck, powershell-check]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npx tsc
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 7

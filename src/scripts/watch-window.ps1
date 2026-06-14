@@ -23,7 +23,8 @@ trap {
         line     = $_.InvocationInfo.ScriptLineNumber
         category = $_.CategoryInfo.Category.ToString()
     }
-    [Console]::Error.WriteLine($errObj | ConvertTo-Json -Compress)
+    $json = $errObj | ConvertTo-Json -Compress
+    [Console]::Error.WriteLine($json)
     [Console]::Error.Flush()
     exit 1
 }
